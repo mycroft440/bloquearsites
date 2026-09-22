@@ -37,27 +37,37 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::Configure o repository secret ANDROID_KEYSTORE_BASE64 antes de gerar o APK atualizável."
-            exit 1
+            echo "HAS_STABLE_SIGNING=false" >> "$GITHUB_ENV"
+            echo "::warning::ANDROID_KEYSTORE_BASE64 não configurado; será usada a assinatura debug padrão."
+            exit 0
           fi
+
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bloquearsites-signing.jks"
           keytool -list \
             -keystore "$RUNNER_TEMP/bloquearsites-signing.jks" \
             -storepass "$ANDROID_KEYSTORE_PASSWORD" \
             -alias "$ANDROID_KEY_ALIAS" >/dev/null
 
-      - name: Gerar APK atualizável
+          echo "HAS_STABLE_SIGNING=true" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/bloquearsites-signing.jks" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Gerar APK
         if: github.event_name == 'push'
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/bloquearsites-signing.jks
-          ANDROID_KEYSTORE_PASSWORD: android
-          ANDROID_KEY_ALIAS: bloquearsites-debug
-          ANDROID_KEY_PASSWORD: android
         run: gradle --stacktrace assembleDebug -PversionCode=${{ github.run_number }}
 
       - name: Publicar APK atualizável
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && env.HAS_STABLE_SIGNING == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bloquearsites-update
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publicar APK de debug
+        if: github.event_name == 'push' && env.HAS_STABLE_SIGNING != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bloquearsites-debug
           path: app/build/outputs/apk/debug/app-debug.apk
