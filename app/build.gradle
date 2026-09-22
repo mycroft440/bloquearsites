@@ -2,6 +2,10 @@ plugins {
     id "com.android.application"
 }
 
+def appVersionCode = (project.findProperty("versionCode") ?: "1").toString().toInteger()
+def ciKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def ciSigningConfigured = ciKeystorePath != null && !ciKeystorePath.trim().isEmpty()
+
 android {
     namespace "com.mycroft.bloquearsites"
     compileSdk 35
@@ -10,14 +14,34 @@ android {
         applicationId "com.mycroft.bloquearsites"
         minSdk 26
         targetSdk 35
-        versionCode 1
+        versionCode appVersionCode
         versionName "1.0.0"
 
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
     }
 
+    signingConfigs {
+        ci {
+            if (ciSigningConfigured) {
+                storeFile file(ciKeystorePath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciSigningConfigured) {
+                signingConfig signingConfigs.ci
+            }
+        }
+
         release {
+            if (ciSigningConfigured) {
+                signingConfig signingConfigs.ci
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
