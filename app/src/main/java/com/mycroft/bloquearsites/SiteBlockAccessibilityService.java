@@ -106,6 +106,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         AccessibilityNodeInfo extractionRoot = root;
+        if (FirefoxProfile.matchesPackage(packageName)) {
+            extractionRoot = FirefoxProfile.resolveExtractionRoot(
+                    packageName, event.getWindowId(), root, getWindows()
+            );
+        }
         if (samsung && !sameWindow(event, root)) {
             // Se o evento e a raiz apontam para janelas diferentes, a fonte do evento é mais confiável.
             extractionRoot = null;

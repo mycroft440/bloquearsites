@@ -311,6 +311,23 @@ public class SiteBlockAccessibilityServiceTest {
     }
 
     @Test
+    public void firefoxDoesNotReadABackgroundWindowWhenAnotherAppIsInFront() {
+        AccessibilityNodeInfo firefoxRoot = firefoxAddressNode(
+                FIREFOX, "mozac_browser_toolbar_url_view", "example.com"
+        );
+        shadowService.setWindows(Arrays.asList(
+                window(AccessibilityWindowInfo.TYPE_APPLICATION, addressNode(CHROME, "example.org")),
+                window(AccessibilityWindowInfo.TYPE_APPLICATION, firefoxRoot)
+        ));
+        shadowService.setRootInActiveWindow(addressNode(service.getPackageName(), "Página bloqueada"));
+
+        sendWindowEvent(FIREFOX);
+
+        assertNull(curtain());
+        assertNull(shadowService.getNextStartedActivity());
+    }
+
+    @Test
     public void interruptionDoesNotExposeThePageAndDestroyRemovesTheCoverAndCallbacks() {
         visit(CHROME, "example.com");
         LinearLayout original = curtain();
