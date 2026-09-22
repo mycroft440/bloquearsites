@@ -105,9 +105,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         String visibleUrl = urlExtractor.extract(extractionRoot, source, packageName);
 
         if (firefoxClassic) {
-            // Firefox clássico pode atualizar a barra depois do evento e manter nós antigos por instantes.
-            // Sempre confirmamos a URL em uma leitura curta e posterior antes de bloquear.
-            scheduleFirefoxRetry(packageName);
+            // O Fennec pode expor a URL de forma confiável apenas na fonte do evento e depois
+            // recriar a toolbar. Mantemos essa URL como fallback, mas ainda preferimos uma
+            // releitura curta da janela ativa antes de bloquear.
+            scheduleFirefoxRetry(packageName, visibleUrl);
             return;
         }
 
@@ -170,15 +171,24 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         blockCurrentPage(packageName);
     }
 
-    private void scheduleFirefoxRetry(String expectedPackage) {
+    private void scheduleFirefoxRetry(String expectedPackage, String eventUrl) {
+        // Eventos consecutivos do Fennec podem chegar depois de a toolbar ter sido recriada.
+        // Se já temos uma URL válida pendente, um evento sem URL não deve apagá-la.
+        if (pendingFirefoxRetry != null && eventUrl == null) {
+            return;
+        }
+
         cancelFirefoxRetry();
+        final String fallbackUrl = eventUrl;
 
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
 
             AccessibilityNodeInfo root = getRootInActiveWindow();
             String rootPackage = packageNameOf(root);
-            if (root == null || !isFirefoxClassicPackage(rootPackage)) {
+            if (root == null
+                    || !expectedPackage.equals(rootPackage)
+                    || !isFirefoxClassicPackage(rootPackage)) {
                 return;
             }
 
@@ -186,7 +196,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             Set<String> blockedSites = store.getSet();
             if (blockedSites.isEmpty()) return;
 
-            String visibleUrl = urlExtractor.extract(root, null, rootPackage);
+            String confirmedUrl = urlExtractor.extract(root, null, rootPackage);
+            String visibleUrl = confirmedUrl != null ? confirmedUrl : fallbackUrl;
             if (visibleUrl != null) {
                 handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
             }
