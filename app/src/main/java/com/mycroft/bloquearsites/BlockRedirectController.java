@@ -27,6 +27,7 @@ final class BlockRedirectController {
     private static final long REDIRECT_DEBOUNCE_MS = 1200L;
     private static final long REDIRECT_CHECK_DELAY_MS = 250L;
     private static final long SHOW_RETRY_DELAY_MS = 5000L;
+    private static final long CURTAIN_MAX_VISIBLE_MS = 3000L;
 
     private final AccessibilityService service;
     private final Handler mainHandler;
@@ -38,8 +39,10 @@ final class BlockRedirectController {
     private String redirectPackage;
     private boolean redirectFailed;
     private long lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
+    private long curtainVisibleUntil = 0L;
 
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
+    private final Runnable curtainTimeoutRunnable = this::expireBlockCurtain;
 
     BlockRedirectController(
             AccessibilityService service,
@@ -74,18 +77,23 @@ final class BlockRedirectController {
         if (packageName == null || packageName.isEmpty()) return;
 
         mainHandler.removeCallbacks(redirectCheckRunnable);
+        mainHandler.removeCallbacks(curtainTimeoutRunnable);
         redirectPackage = packageName;
         redirectFailed = false;
         lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
+        curtainVisibleUntil = SystemClock.elapsedRealtime() + CURTAIN_MAX_VISIBLE_MS;
 
         showBlockCurtain();
+        mainHandler.postDelayed(curtainTimeoutRunnable, CURTAIN_MAX_VISIBLE_MS);
         openGoogle();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
 
     void destroy() {
         mainHandler.removeCallbacks(redirectCheckRunnable);
+        mainHandler.removeCallbacks(curtainTimeoutRunnable);
         redirectPackage = null;
+        curtainVisibleUntil = 0L;
         hideBlockCurtain();
     }
 
@@ -124,14 +132,13 @@ final class BlockRedirectController {
         if (redirectPackage.equals(packageName)) {
             String visibleUrl = urlExtractor.extract(root, null, packageName);
             if (isRedirectDestination(visibleUrl)) {
-                redirectPackage = null;
-                hideBlockCurtain();
+                finishRedirect();
                 return;
             }
             showBlockCurtain();
-        } else if (packageName != null) {
-            // Fora do navegador que está redirecionando, a cortina não deve cobrir outro app.
-            // O estado é mantido para confirmar o destino quando o usuário voltar ao navegador.
+        } else {
+            // Sem uma janela ativa confiável, ou fora do navegador que está redirecionando,
+            // a cortina deve falhar aberta para nunca prender a interface do aparelho.
             hideBlockCurtain();
         }
 
@@ -158,6 +165,12 @@ final class BlockRedirectController {
     }
 
     private void showBlockCurtain() {
+        if (curtainVisibleUntil <= 0L
+                || SystemClock.elapsedRealtime() >= curtainVisibleUntil) {
+            hideBlockCurtain();
+            return;
+        }
+
         if (windowManager == null) {
             windowManager = (WindowManager) service.getSystemService(AccessibilityService.WINDOW_SERVICE);
         }
@@ -170,8 +183,7 @@ final class BlockRedirectController {
             blockCurtain.setGravity(Gravity.CENTER);
             blockCurtain.setPadding(dp(24), dp(24), dp(24), dp(24));
             blockCurtain.setClickable(true);
-            blockCurtain.setFocusableInTouchMode(true);
-            blockCurtain.setOnKeyListener((v, keyCode, event) -> true);
+            blockCurtain.setFocusable(false);
 
             TextView curtainMessage = new TextView(service);
             curtainMessage.setText("Página bloqueada");
@@ -198,7 +210,8 @@ final class BlockRedirectController {
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                            | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+                            | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+                            | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.OPAQUE
             );
             params.gravity = Gravity.TOP | Gravity.START;
@@ -206,7 +219,6 @@ final class BlockRedirectController {
 
             try {
                 windowManager.addView(blockCurtain, params);
-                blockCurtain.requestFocus();
             } catch (RuntimeException e) {
                 blockCurtain = null;
                 retryRedirectButton = null;
@@ -223,6 +235,18 @@ final class BlockRedirectController {
         boolean canRetry = redirectFailed
                 || SystemClock.elapsedRealtime() - lastRedirectAt >= SHOW_RETRY_DELAY_MS;
         retryRedirectButton.setVisibility(canRetry ? View.VISIBLE : View.GONE);
+    }
+
+    private void expireBlockCurtain() {
+        curtainVisibleUntil = 0L;
+        hideBlockCurtain();
+    }
+
+    private void finishRedirect() {
+        mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        redirectPackage = null;
+        curtainVisibleUntil = 0L;
+        hideBlockCurtain();
     }
 
     private void hideBlockCurtain() {
