@@ -135,7 +135,6 @@ final class BlockRedirectController {
                 finishRedirect();
                 return;
             }
-            showBlockCurtain();
         } else {
             // Sem uma janela ativa confiável, ou fora do navegador que está redirecionando,
             // a cortina deve falhar aberta para nunca prender a interface do aparelho.
