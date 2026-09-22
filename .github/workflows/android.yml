@@ -21,10 +21,10 @@ jobs:
           gradle-version: "8.10.2"
 
       - name: Testes unitários
-        run: gradle testDebugUnitTest
+        run: gradle --stacktrace testDebugUnitTest
 
       - name: Gerar APK de debug
-        run: gradle assembleDebug
+        run: gradle --stacktrace assembleDebug
 
       - name: Publicar APK de debug
         uses: actions/upload-artifact@v4
