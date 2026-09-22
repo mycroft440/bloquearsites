@@ -335,7 +335,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 return;
             }
             showBlockCurtain();
-        } else if (packageName != null && !getPackageName().equals(packageName)) {
+        } else if (packageName != null) {
             // Suspende apenas a exibição fora do navegador; o redirecionamento segue pendente.
             hideBlockCurtain();
         }
@@ -350,11 +350,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         // e consulta somente o app da frente, nunca um navegador escondido por outro app.
         for (AccessibilityWindowInfo window : getWindows()) {
             if (window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION) {
-                AccessibilityNodeInfo root = window.getRoot();
-                if (root != null) return root;
+                // Se a raiz do app da frente não está disponível, não consulta apps atrás dele.
+                return window.getRoot();
             }
         }
-        return getRootInActiveWindow();
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        // Uma raiz de teclado, cortina ou sistema não comprova uma troca de aplicativo.
+        return redirectPackage.equals(packageNameOf(root)) ? root : null;
     }
 
     private void showBlockCurtain() {

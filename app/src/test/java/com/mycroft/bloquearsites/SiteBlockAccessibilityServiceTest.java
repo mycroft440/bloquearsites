@@ -128,6 +128,7 @@ public class SiteBlockAccessibilityServiceTest {
         assertSame(original, curtain());
         visit(CHROME, "https://example.org/");
         assertSame(original, curtain());
+        shadowService.setWindows(Collections.emptyList());
         shadowService.setRootInActiveWindow(null);
         advance(1000);
         assertSame(original, curtain());
@@ -187,6 +188,34 @@ public class SiteBlockAccessibilityServiceTest {
         advance(300);
         assertNull(curtain());
         assertEquals(CHROME, pendingPackage());
+    }
+
+    @Test
+    public void keyboardOrUnknownForegroundWindowCannotReleaseTheCover() {
+        visit(CHROME, "example.com");
+        LinearLayout original = curtain();
+        shadowService.setWindows(Collections.emptyList());
+        shadowService.setRootInActiveWindow(addressNode("com.android.inputmethod.latin", ""));
+        advance(300);
+        assertSame(original, curtain());
+
+        shadowService.setWindows(Arrays.asList(
+                window(AccessibilityWindowInfo.TYPE_APPLICATION, null),
+                window(AccessibilityWindowInfo.TYPE_APPLICATION, addressNode(CHROME, "google.com"))
+        ));
+        advance(300);
+        assertSame(original, curtain());
+        assertEquals(CHROME, pendingPackage());
+    }
+
+    @Test
+    public void canOpenTheBlockerAppWithoutLosingThePendingBrowserProtection() {
+        visit(CHROME, "example.com");
+        visit(service.getPackageName(), "");
+        assertNull(curtain());
+        assertEquals(CHROME, pendingPackage());
+        visit(CHROME, "example.com");
+        assertNotNull(curtain());
     }
 
     @Test
@@ -257,8 +286,9 @@ public class SiteBlockAccessibilityServiceTest {
     }
 
     private void visit(String packageName, String url) {
-        shadowService.setWindows(Collections.emptyList());
-        shadowService.setRootInActiveWindow(addressNode(packageName, url));
+        AccessibilityNodeInfo root = addressNode(packageName, url);
+        shadowService.setWindows(Collections.singletonList(window(AccessibilityWindowInfo.TYPE_APPLICATION, root)));
+        shadowService.setRootInActiveWindow(root);
         AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
         event.setPackageName(packageName);
         service.onAccessibilityEvent(event);
