@@ -9,6 +9,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.util.Set;
 
@@ -100,7 +101,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         AccessibilityNodeInfo extractionRoot = root;
-        if (samsung && !sameWindow(event, root)) {
+        if (firefoxClassic) {
+            // getRootInActiveWindow() pode apontar para uma janela auxiliar/IME. Como o serviço
+            // já recupera janelas interativas, procuramos explicitamente a janela do Firefox.
+            AccessibilityNodeInfo firefoxRoot = applicationRootForPackage(packageName);
+            if (firefoxRoot != null) extractionRoot = firefoxRoot;
+        } else if (samsung && !sameWindow(event, root)) {
             // Se o evento e a raiz apontam para janelas diferentes, a fonte do evento é mais confiável.
             extractionRoot = null;
         }
@@ -196,21 +202,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
 
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            String rootPackage = packageNameOf(root);
-
-            if (root != null && rootPackage != null && !expectedPackage.equals(rootPackage)) {
-                return;
-            }
-
-            if (root != null && expectedPackage.equals(rootPackage)) {
+            AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
+            if (root != null) {
                 if (store == null) store = new BlockedSitesStore(this);
                 Set<String> blockedSites = store.getSet();
                 if (blockedSites.isEmpty()) return;
 
-                String visibleUrl = urlExtractor.extract(root, null, rootPackage);
+                String visibleUrl = urlExtractor.extract(root, null, expectedPackage);
                 if (visibleUrl != null) {
-                    handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
+                    handleVisibleUrl(expectedPackage, visibleUrl, blockedSites);
                     return;
                 }
             }
@@ -265,6 +265,28 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         if (pendingSamsungRetry == null) return;
         mainHandler.removeCallbacks(pendingSamsungRetry);
         pendingSamsungRetry = null;
+    }
+
+    private AccessibilityNodeInfo applicationRootForPackage(String packageName) {
+        if (packageName == null) return null;
+
+        try {
+            for (AccessibilityWindowInfo window : getWindows()) {
+                if (window == null || window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) {
+                    continue;
+                }
+
+                AccessibilityNodeInfo candidate = window.getRoot();
+                if (packageName.equals(packageNameOf(candidate))) {
+                    return candidate;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // Algumas versões do Android podem invalidar uma janela enquanto percorremos a lista.
+        }
+
+        AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
+        return packageName.equals(packageNameOf(activeRoot)) ? activeRoot : null;
     }
 
     private boolean sameWindow(AccessibilityEvent event, AccessibilityNodeInfo root) {
