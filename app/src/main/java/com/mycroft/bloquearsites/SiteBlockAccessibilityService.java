@@ -17,6 +17,8 @@ import java.util.Set;
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
     private static final long BANNER_DURATION_MS = 1400L;
+    private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
+    private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
 
     private final UrlExtractor urlExtractor = new UrlExtractor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -38,17 +40,29 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        if (event == null || event.getPackageName() == null) return;
+        if (event == null) return;
         if (store == null) store = new BlockedSitesStore(this);
 
         Set<String> blockedSites = store.getSet();
         if (blockedSites.isEmpty()) return;
 
-        String packageName = event.getPackageName().toString();
-        if (getPackageName().equals(packageName)) return;
-
         AccessibilityNodeInfo root = getRootInActiveWindow();
         AccessibilityNodeInfo source = event.getSource();
+
+        String eventPackage = event.getPackageName() == null
+                ? null
+                : event.getPackageName().toString();
+        String rootPackage = packageNameOf(root);
+        String sourcePackage = packageNameOf(source);
+
+        String packageName = eventPackage;
+        if (isSamsungPackage(rootPackage)) {
+            packageName = rootPackage;
+        } else if (isSamsungPackage(sourcePackage)) {
+            packageName = sourcePackage;
+        }
+
+        if (packageName == null || getPackageName().equals(packageName)) return;
 
         String visibleUrl = urlExtractor.extract(root, source, packageName);
         if (visibleUrl == null) return;
@@ -67,6 +81,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         lastBlockedKey = blockKey;
         lastBlockedAt = now;
         blockCurrentPage(matchedDomain);
+    }
+
+    private String packageNameOf(AccessibilityNodeInfo node) {
+        if (node == null || node.getPackageName() == null) return null;
+        return node.getPackageName().toString();
+    }
+
+    private boolean isSamsungPackage(String packageName) {
+        return SAMSUNG_PACKAGE.equals(packageName) || SAMSUNG_BETA_PACKAGE.equals(packageName);
     }
 
     private void blockCurrentPage(String domain) {
