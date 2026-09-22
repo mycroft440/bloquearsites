@@ -3,23 +3,17 @@ package com.mycroft.bloquearsites;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.pm.ApplicationInfo;
-import android.graphics.Color;
-import android.graphics.PixelFormat;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
-import android.view.Gravity;
-import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
-import android.widget.TextView;
 
 import java.util.Set;
 
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
-    private static final long BANNER_DURATION_MS = 1400L;
     private static final long FIREFOX_RETRY_DELAY_MS = 220L;
     private static final long SAMSUNG_RETRY_DELAY_MS = 250L;
 
@@ -39,20 +33,17 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private BlockedSitesStore store;
-    private WindowManager windowManager;
-    private TextView blockBanner;
+    private BlockRedirectController redirectController;
     private String lastBlockedKey = "";
     private long lastBlockedAt = 0L;
     private Runnable pendingFirefoxRetry;
     private Runnable pendingSamsungRetry;
 
-    private final Runnable hideBannerRunnable = this::hideBlockBanner;
-
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         store = new BlockedSitesStore(this);
-        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
 
         AccessibilityServiceInfo info = getServiceInfo();
         if (info != null) {
@@ -69,6 +60,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
+
+        // O redirecionamento é um fluxo independente. Se acabou de confirmar google.com,
+        // descartamos este evento para não reutilizar uma árvore anterior ao redirecionamento.
+        if (redirectController != null && redirectController.refreshBeforeDetection()) {
+            return;
+        }
+
         if (store == null) store = new BlockedSitesStore(this);
 
         AccessibilityNodeInfo source = event.getSource();
@@ -76,6 +74,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         String packageName = resolvePackageName(event, source, root);
         if (packageName == null || getPackageName().equals(packageName)) return;
+
+        // Enquanto um navegador está sendo redirecionado, os eventos dele pertencem ao
+        // controlador de redirecionamento e não voltam para a lógica de detecção/bloqueio.
+        if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
+            return;
+        }
 
         boolean firefoxClassic = isFirefoxClassicPackage(packageName);
         boolean samsung = isSamsungPackage(packageName);
@@ -145,6 +149,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             String visibleUrl,
             Set<String> blockedSites
     ) {
+        // O destino do redirecionamento fica fora da regra de bloqueio para impedir loop.
+        if (redirectController != null && redirectController.isRedirectDestination(visibleUrl)) {
+            return;
+        }
+
         String matchedDomain = DomainMatcher.findMatchedDomain(visibleUrl, blockedSites);
         if (matchedDomain == null) return;
 
@@ -158,7 +167,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         lastBlockedKey = blockKey;
         lastBlockedAt = now;
-        blockCurrentPage(matchedDomain);
+        blockCurrentPage(packageName);
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
@@ -321,83 +330,31 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
     }
 
-    private void blockCurrentPage(String domain) {
-        showBlockBanner(domain);
+    private void blockCurrentPage(String packageName) {
+        cancelFirefoxRetry();
+        cancelSamsungRetry();
 
-        boolean wentBack = performGlobalAction(GLOBAL_ACTION_BACK);
-        if (!wentBack) {
-            performGlobalAction(GLOBAL_ACTION_HOME);
+        if (redirectController == null) {
+            redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
         }
-    }
-
-    private void showBlockBanner(String domain) {
-        if (windowManager == null) {
-            windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        }
-
-        mainHandler.removeCallbacks(hideBannerRunnable);
-
-        if (blockBanner == null) {
-            blockBanner = new TextView(this);
-            blockBanner.setTextColor(Color.WHITE);
-            blockBanner.setBackgroundColor(Color.rgb(176, 0, 32));
-            blockBanner.setTextSize(18f);
-            blockBanner.setGravity(Gravity.CENTER);
-            int horizontal = dp(20);
-            int vertical = dp(18);
-            blockBanner.setPadding(horizontal, vertical, horizontal, vertical);
-
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT
-            );
-            params.gravity = Gravity.TOP;
-
-            try {
-                windowManager.addView(blockBanner, params);
-            } catch (RuntimeException ignored) {
-                blockBanner = null;
-            }
-        }
-
-        if (blockBanner != null) {
-            blockBanner.setText("Site bloqueado: " + domain);
-            mainHandler.postDelayed(hideBannerRunnable, BANNER_DURATION_MS);
-        }
-    }
-
-    private void hideBlockBanner() {
-        if (blockBanner == null || windowManager == null) return;
-        try {
-            windowManager.removeView(blockBanner);
-        } catch (RuntimeException ignored) {
-        } finally {
-            blockBanner = null;
-        }
+        redirectController.start(packageName);
     }
 
     @Override
     public void onInterrupt() {
         cancelFirefoxRetry();
         cancelSamsungRetry();
-        hideBlockBanner();
     }
 
     @Override
     public void onDestroy() {
         cancelFirefoxRetry();
         cancelSamsungRetry();
+        if (redirectController != null) {
+            redirectController.destroy();
+            redirectController = null;
+        }
         mainHandler.removeCallbacksAndMessages(null);
-        hideBlockBanner();
         super.onDestroy();
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }
