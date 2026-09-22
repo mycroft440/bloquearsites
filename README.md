@@ -10,7 +10,11 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 4. Para navegadores conhecidos, o app procura primeiro IDs específicos da barra de endereço.
 5. Se o navegador não tiver um perfil conhecido ou o ID específico falhar, entra um fallback genérico que procura nós de acessibilidade cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
-7. Ao detectar um domínio bloqueado, o serviço executa a ação global **Voltar** e mostra por um instante um banner de acessibilidade. Se a ação Voltar não estiver disponível, tenta ir para a tela inicial.
+7. Ao detectar um domínio bloqueado, o serviço cobre imediatamente a página com uma **cortina opaca de tela inteira**, com a mensagem **Página bloqueada**. A cortina recebe o foco e intercepta toques e teclas, impedindo a interação com o conteúdo coberto, enquanto o serviço solicita a abertura de `https://google.com` no mesmo navegador.
+8. A cortina permanece sobre o navegador até o serviço confirmar `google.com` ou `www.google.com` na barra de endereço da janela em primeiro plano. Eventos de acessibilidade e consultas periódicas verificam a URL; não há temporizador para liberar a página. URLs ausentes, páginas intermediárias e a aceitação do pedido de abertura não contam como confirmação.
+9. Se a abertura falhar ou o endereço não for confirmado em cinco segundos, a cortina oferece o botão **Tentar novamente**, sem liberar a página. Ao trocar de aplicativo, ela deixa de cobrir a tela, mas o bloqueio continua pendente e a cortina reaparece ao retornar ao navegador enquanto o destino não for confirmado.
+
+`google.com` (incluindo `www.google.com`) permanece disponível como destino, mesmo se estiver na lista de bloqueio, para evitar um ciclo de redirecionamentos. Os demais subdomínios continuam sujeitos à lista.
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 
@@ -46,7 +50,9 @@ Accessibility não fornece uma API oficial universal para obter a URL atual de q
 - WebViews sem barra de endereço acessível não são bloqueados por este método;
 - páginas internas do navegador são ignoradas;
 - o modo anônimo funciona apenas quando a barra de endereço continua exposta à acessibilidade;
-- o serviço reage a eventos da UI; há uma pequena janela entre a navegação e a ação de bloqueio.
+- o serviço reage a eventos da UI; há uma pequena janela entre a navegação e a detecção. A cortina protege a página a partir da detecção, não impede que o navegador renderize conteúdo antes disso;
+- a confirmação observa o endereço exposto pelo navegador, não o término do carregamento de todos os recursos da página do Google;
+- o navegador pode abrir o destino em outra aba. O app solicita a reutilização da aba de redirecionamento quando suportada, mas não controla as abas nem o histórico do navegador.
 
 Para bloqueio de rede independente da interface do navegador, a arquitetura adequada seria VPN local/DNS, que é outra abordagem e não foi adicionada aqui.
 

@@ -187,7 +187,7 @@ public final class MainActivity extends Activity {
                 .setMessage(
                         "Para bloquear os sites que você escolher, o app precisa usar o serviço de acessibilidade para ler o texto visível da barra de endereço dos navegadores e identificar o domínio aberto.\n\n"
                                 + "A URL é comparada somente no aparelho com a sua lista de bloqueio. O app não possui permissão de internet, não envia URLs, histórico ou a lista de sites a terceiros e não altera configurações sem sua ação.\n\n"
-                                + "Quando um domínio bloqueado é detectado, o app executa a ação Voltar para retirar a página da tela."
+                                + "Quando um domínio bloqueado é detectado, o app cobre a página com uma cortina e abre google.com no mesmo navegador. A cortina permanece sobre o navegador até a confirmação desse endereço. O domínio google.com fica disponível como destino do redirecionamento."
                 )
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Concordo", (dialog, which) -> openAccessibilitySettings())

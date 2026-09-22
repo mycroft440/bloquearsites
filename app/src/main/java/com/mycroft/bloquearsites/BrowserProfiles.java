@@ -27,16 +27,7 @@ public final class BrowserProfiles {
                     },
                     "url_bar"
             ),
-            new BrowserProfile(
-                    new String[]{
-                            "org.mozilla.firefox",
-                            "org.mozilla.firefox_beta",
-                            "org.mozilla.fenix",
-                            "org.torproject.torbrowser"
-                    },
-                    "mozac_browser_toolbar_url_view",
-                    "mozac_browser_toolbar_edit_url_view"
-            ),
+            FirefoxProfile.PROFILE,
             new BrowserProfile(
                     new String[]{
                             "com.sec.android.app.sbrowser",
