@@ -42,7 +42,17 @@ public final class BrowserProfiles {
                             "com.sec.android.app.sbrowser",
                             "com.sec.android.app.sbrowser.beta"
                     },
-                    "location_bar_edit_text"
+                    "location_bar_edit_text",
+                    "location_bar",
+                    "location_bar_text",
+                    "location_bar_url_text",
+                    "url_bar",
+                    "url_bar_text",
+                    "address_bar",
+                    "address_bar_edit_text",
+                    "search_url_text",
+                    "toolbar_url",
+                    "toolbar_url_text"
             ),
             new BrowserProfile(
                     new String[]{
