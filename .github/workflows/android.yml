@@ -23,11 +23,41 @@ jobs:
       - name: Testes unitários
         run: gradle --stacktrace testDebugUnitTest
 
-      - name: Gerar APK de debug
-        run: gradle --stacktrace assembleDebug
+      - name: Validar build em pull request
+        if: github.event_name == 'pull_request'
+        run: gradle --stacktrace assembleDebug -PversionCode=${{ github.run_number }}
 
-      - name: Publicar APK de debug
+      - name: Preparar assinatura estável
+        if: github.event_name == 'push'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bloquearsites-signing.jks"
+          keytool -list \
+            -keystore "$RUNNER_TEMP/bloquearsites-signing.jks" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
+
+      - name: Gerar APK atualizável
+        if: github.event_name == 'push'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/bloquearsites-signing.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --stacktrace assembleDebug -PversionCode=${{ github.run_number }}
+
+      - name: Publicar APK atualizável
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
-          name: bloquearsites-debug
+          name: bloquearsites-update
           path: app/build/outputs/apk/debug/app-debug.apk
