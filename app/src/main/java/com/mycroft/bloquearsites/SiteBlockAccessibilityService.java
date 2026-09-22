@@ -15,6 +15,7 @@ import java.util.Set;
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
     private static final long FIREFOX_RETRY_DELAY_MS = 220L;
+    private static final int FIREFOX_RETRY_ATTEMPTS = 4;
     private static final long SAMSUNG_RETRY_DELAY_MS = 250L;
 
     private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
@@ -185,28 +186,37 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
-        // Um retry pendente não é reiniciado por cada novo evento sem URL. Isso garante que a
-        // releitura realmente aconteça mesmo em páginas que geram eventos continuamente.
+        // Eventos sucessivos sem URL não reiniciam o relógio. Uma sequência curta cobre o caso
+        // em que o Firefox publica a barra depois do evento que iniciou a navegação.
         if (pendingFirefoxRetry != null) return;
+        scheduleFirefoxRetryAttempt(expectedPackage, FIREFOX_RETRY_ATTEMPTS);
+    }
 
+    private void scheduleFirefoxRetryAttempt(String expectedPackage, int attemptsRemaining) {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
 
             AccessibilityNodeInfo root = getRootInActiveWindow();
             String rootPackage = packageNameOf(root);
-            if (root == null
-                    || !expectedPackage.equals(rootPackage)
-                    || !isFirefoxClassicPackage(rootPackage)) {
+
+            if (root != null && rootPackage != null && !expectedPackage.equals(rootPackage)) {
                 return;
             }
 
-            if (store == null) store = new BlockedSitesStore(this);
-            Set<String> blockedSites = store.getSet();
-            if (blockedSites.isEmpty()) return;
+            if (root != null && expectedPackage.equals(rootPackage)) {
+                if (store == null) store = new BlockedSitesStore(this);
+                Set<String> blockedSites = store.getSet();
+                if (blockedSites.isEmpty()) return;
 
-            String visibleUrl = urlExtractor.extract(root, null, rootPackage);
-            if (visibleUrl != null) {
-                handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
+                String visibleUrl = urlExtractor.extract(root, null, rootPackage);
+                if (visibleUrl != null) {
+                    handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
+                    return;
+                }
+            }
+
+            if (attemptsRemaining > 1) {
+                scheduleFirefoxRetryAttempt(expectedPackage, attemptsRemaining - 1);
             }
         };
 
