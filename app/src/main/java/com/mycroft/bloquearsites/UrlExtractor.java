@@ -11,9 +11,11 @@ public final class UrlExtractor {
     private static final int MAX_GENERIC_NODES = 350;
     private static final int MAX_SAMSUNG_NODES = 500;
     private static final int MAX_SAMSUNG_SOURCE_ANCESTORS = 12;
+    private static final int MAX_FIREFOX_SOURCE_ANCESTORS = 8;
     private static final int MAX_DIAGNOSTIC_NODES = 180;
     private static final int MAX_DIAGNOSTIC_CANDIDATES = 10;
 
+    private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
 
@@ -65,6 +67,10 @@ public final class UrlExtractor {
             return extractSamsungSourceFirst(root, eventSource, packageName);
         }
 
+        if (isFirefoxClassicPackage(packageName)) {
+            return extractFirefoxClassic(root, eventSource, packageName);
+        }
+
         if (root == null) {
             return extractFromNodeIfAddressLike(eventSource);
         }
@@ -79,6 +85,123 @@ public final class UrlExtractor {
         if (fromEvent != null) return fromEvent;
 
         return extractGeneric(root);
+    }
+
+    private String extractFirefoxClassic(
+            AccessibilityNodeInfo root,
+            AccessibilityNodeInfo eventSource,
+            String packageName
+    ) {
+        BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+        if (profile == null) return null;
+
+        // No Firefox clássico a árvore pode manter nós antigos da barra de endereço.
+        // Por isso só aceitamos nós visíveis da janela ativa e não usamos o fallback genérico.
+        if (eventSource != null) {
+            String fromSource = extractFirefoxFromSourceChain(eventSource, packageName, profile);
+            if (fromSource != null) return fromSource;
+        }
+
+        if (root == null) return null;
+        return extractWithVisibleProfile(root, packageName, profile);
+    }
+
+    private String extractFirefoxFromSourceChain(
+            AccessibilityNodeInfo eventSource,
+            String packageName,
+            BrowserProfile profile
+    ) {
+        AccessibilityNodeInfo current = eventSource;
+
+        for (int depth = 0;
+             current != null && depth < MAX_FIREFOX_SOURCE_ANCESTORS;
+             depth++) {
+
+            if (isVisibleFirefoxNode(current, packageName, current.getWindowId())) {
+                if (hasExactProfileId(current, packageName, profile)) {
+                    String direct = firstUrlLikeValue(current);
+                    if (direct != null) return direct;
+                }
+
+                String profiled = extractWithVisibleProfile(current, packageName, profile);
+                if (profiled != null) return profiled;
+            }
+
+            try {
+                current = current.getParent();
+            } catch (RuntimeException ignored) {
+                current = null;
+            }
+        }
+
+        return null;
+    }
+
+    private String extractWithVisibleProfile(
+            AccessibilityNodeInfo root,
+            String packageName,
+            BrowserProfile profile
+    ) {
+        if (root == null || profile == null) return null;
+
+        int expectedWindowId = root.getWindowId();
+        for (String idName : profile.getAddressViewIds()) {
+            String exactId = packageName + ":id/" + idName;
+            try {
+                List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(exactId);
+                String value = firstVisibleValidText(nodes, packageName, expectedWindowId);
+                if (value != null) return value;
+            } catch (RuntimeException ignored) {
+                // O Firefox pode recriar a toolbar durante navegação; aguardamos o próximo evento.
+            }
+        }
+        return null;
+    }
+
+    private String firstVisibleValidText(
+            List<AccessibilityNodeInfo> nodes,
+            String packageName,
+            int expectedWindowId
+    ) {
+        if (nodes == null) return null;
+
+        for (AccessibilityNodeInfo node : nodes) {
+            if (!isVisibleFirefoxNode(node, packageName, expectedWindowId)) continue;
+
+            String value = firstUrlLikeValue(node);
+            if (value != null) return value;
+        }
+        return null;
+    }
+
+    private boolean isVisibleFirefoxNode(
+            AccessibilityNodeInfo node,
+            String packageName,
+            int expectedWindowId
+    ) {
+        if (node == null || !node.isVisibleToUser()) return false;
+
+        CharSequence nodePackage = node.getPackageName();
+        if (nodePackage == null || !packageName.equals(nodePackage.toString())) return false;
+
+        int nodeWindowId = node.getWindowId();
+        return expectedWindowId < 0 || nodeWindowId < 0 || nodeWindowId == expectedWindowId;
+    }
+
+    private boolean hasExactProfileId(
+            AccessibilityNodeInfo node,
+            String packageName,
+            BrowserProfile profile
+    ) {
+        if (node == null || profile == null) return false;
+
+        String id = node.getViewIdResourceName();
+        if (id == null) return false;
+
+        for (String idName : profile.getAddressViewIds()) {
+            if ((packageName + ":id/" + idName).equals(id)) return true;
+        }
+        return false;
     }
 
     private String extractSamsungSourceFirst(
@@ -361,6 +484,10 @@ public final class UrlExtractor {
             if (lower.contains(marker)) return true;
         }
         return false;
+    }
+
+    private boolean isFirefoxClassicPackage(String packageName) {
+        return FIREFOX_CLASSIC_PACKAGE.equals(packageName);
     }
 
     private boolean isSamsungPackage(String packageName) {

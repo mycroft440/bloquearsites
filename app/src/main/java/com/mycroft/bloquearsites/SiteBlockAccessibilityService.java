@@ -20,8 +20,10 @@ import java.util.Set;
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
     private static final long BANNER_DURATION_MS = 1400L;
+    private static final long FIREFOX_RETRY_DELAY_MS = 220L;
     private static final long SAMSUNG_RETRY_DELAY_MS = 250L;
 
+    private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
     private static final String SAMSUNG_LOG_TAG = "BloquearSitesSamsung";
@@ -41,6 +43,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private TextView blockBanner;
     private String lastBlockedKey = "";
     private long lastBlockedAt = 0L;
+    private Runnable pendingFirefoxRetry;
     private Runnable pendingSamsungRetry;
 
     private final Runnable hideBannerRunnable = this::hideBlockBanner;
@@ -74,13 +77,17 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         String packageName = resolvePackageName(event, source, root);
         if (packageName == null || getPackageName().equals(packageName)) return;
 
+        boolean firefoxClassic = isFirefoxClassicPackage(packageName);
         boolean samsung = isSamsungPackage(packageName);
+        if (!firefoxClassic) cancelFirefoxRetry();
+
         if (!samsung && !isLegacyEventType(event.getEventType())) {
             return;
         }
 
         Set<String> blockedSites = store.getSet();
         if (blockedSites.isEmpty()) {
+            if (firefoxClassic) cancelFirefoxRetry();
             if (samsung) cancelSamsungRetry();
             return;
         }
@@ -92,6 +99,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         String visibleUrl = urlExtractor.extract(extractionRoot, source, packageName);
+
+        if (firefoxClassic) {
+            // Firefox clássico pode atualizar a barra depois do evento e manter nós antigos por instantes.
+            // Sempre confirmamos a URL em uma leitura curta e posterior antes de bloquear.
+            scheduleFirefoxRetry(packageName);
+            return;
+        }
 
         if (samsung) {
             logSamsungEvent(event, source, root, visibleUrl);
@@ -145,6 +159,37 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         lastBlockedKey = blockKey;
         lastBlockedAt = now;
         blockCurrentPage(matchedDomain);
+    }
+
+    private void scheduleFirefoxRetry(String expectedPackage) {
+        cancelFirefoxRetry();
+
+        pendingFirefoxRetry = () -> {
+            pendingFirefoxRetry = null;
+
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            String rootPackage = packageNameOf(root);
+            if (root == null || !isFirefoxClassicPackage(rootPackage)) {
+                return;
+            }
+
+            if (store == null) store = new BlockedSitesStore(this);
+            Set<String> blockedSites = store.getSet();
+            if (blockedSites.isEmpty()) return;
+
+            String visibleUrl = urlExtractor.extract(root, null, rootPackage);
+            if (visibleUrl != null) {
+                handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
+            }
+        };
+
+        mainHandler.postDelayed(pendingFirefoxRetry, FIREFOX_RETRY_DELAY_MS);
+    }
+
+    private void cancelFirefoxRetry() {
+        if (pendingFirefoxRetry == null) return;
+        mainHandler.removeCallbacks(pendingFirefoxRetry);
+        pendingFirefoxRetry = null;
     }
 
     private void scheduleSamsungRetry(String expectedPackage) {
@@ -206,6 +251,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     private int windowIdOf(AccessibilityNodeInfo node) {
         return node == null ? -1 : node.getWindowId();
+    }
+
+    private boolean isFirefoxClassicPackage(String packageName) {
+        return FIREFOX_CLASSIC_PACKAGE.equals(packageName);
     }
 
     private boolean isSamsungPackage(String packageName) {
@@ -334,12 +383,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
+        cancelFirefoxRetry();
         cancelSamsungRetry();
         hideBlockBanner();
     }
 
     @Override
     public void onDestroy() {
+        cancelFirefoxRetry();
         cancelSamsungRetry();
         mainHandler.removeCallbacksAndMessages(null);
         hideBlockBanner();
