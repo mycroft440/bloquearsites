@@ -47,8 +47,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         AccessibilityServiceInfo info = getServiceInfo();
         if (info != null) {
-            // Recebemos todos os eventos para não perder eventos específicos do Samsung Internet.
-            // Para os demais navegadores, onAccessibilityEvent mantém exatamente o conjunto antigo.
+            // Recebemos todos os eventos para não perder mudanças específicas do Samsung Internet
+            // e do Firefox. Os demais navegadores continuam filtrados pelo conjunto legado abaixo.
             info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                     | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -85,7 +85,9 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         boolean samsung = isSamsungPackage(packageName);
         if (!firefoxClassic) cancelFirefoxRetry();
 
-        if (!samsung && !isLegacyEventType(event.getEventType())) {
+        // Firefox e Samsung podem sinalizar mudanças relevantes com tipos de evento diferentes
+        // dos navegadores Chromium. Para eles, não descartamos eventos antes de ler a URL.
+        if (!samsung && !firefoxClassic && !isLegacyEventType(event.getEventType())) {
             return;
         }
 
@@ -105,10 +107,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         String visibleUrl = urlExtractor.extract(extractionRoot, source, packageName);
 
         if (firefoxClassic) {
-            // O Fennec pode expor a URL de forma confiável apenas na fonte do evento e depois
-            // recriar a toolbar. Mantemos essa URL como fallback, mas ainda preferimos uma
-            // releitura curta da janela ativa antes de bloquear.
-            scheduleFirefoxRetry(packageName, visibleUrl);
+            // Se o Firefox já expôs uma URL válida, processamos imediatamente. O fluxo anterior
+            // descartava essa leitura e reagendava a cada evento, o que podia impedir o retry de
+            // executar durante páginas que atualizam a UI continuamente.
+            if (visibleUrl != null) {
+                cancelFirefoxRetry();
+                handleVisibleUrl(packageName, visibleUrl, blockedSites);
+            } else {
+                scheduleFirefoxRetry(packageName);
+            }
             return;
         }
 
@@ -140,6 +147,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (isSamsungPackage(sourcePackage)) return sourcePackage;
         if (isSamsungPackage(rootPackage)) return rootPackage;
+
+        // O Firefox pode gerar eventos cuja fonte imediata pertence a uma janela auxiliar.
+        // Se a fonte ou a janela ativa pertencem ao Firefox, priorizamos o navegador ativo.
+        if (isFirefoxClassicPackage(sourcePackage)) return sourcePackage;
+        if (isFirefoxClassicPackage(rootPackage)) return rootPackage;
+
         if (eventPackage != null) return eventPackage;
         if (sourcePackage != null) return sourcePackage;
         return rootPackage;
@@ -171,15 +184,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         blockCurrentPage(packageName);
     }
 
-    private void scheduleFirefoxRetry(String expectedPackage, String eventUrl) {
-        // Eventos consecutivos do Fennec podem chegar depois de a toolbar ter sido recriada.
-        // Se já temos uma URL válida pendente, um evento sem URL não deve apagá-la.
-        if (pendingFirefoxRetry != null && eventUrl == null) {
-            return;
-        }
-
-        cancelFirefoxRetry();
-        final String fallbackUrl = eventUrl;
+    private void scheduleFirefoxRetry(String expectedPackage) {
+        // Um retry pendente não é reiniciado por cada novo evento sem URL. Isso garante que a
+        // releitura realmente aconteça mesmo em páginas que geram eventos continuamente.
+        if (pendingFirefoxRetry != null) return;
 
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
@@ -196,8 +204,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             Set<String> blockedSites = store.getSet();
             if (blockedSites.isEmpty()) return;
 
-            String confirmedUrl = urlExtractor.extract(root, null, rootPackage);
-            String visibleUrl = confirmedUrl != null ? confirmedUrl : fallbackUrl;
+            String visibleUrl = urlExtractor.extract(root, null, rootPackage);
             if (visibleUrl != null) {
                 handleVisibleUrl(rootPackage, visibleUrl, blockedSites);
             }
