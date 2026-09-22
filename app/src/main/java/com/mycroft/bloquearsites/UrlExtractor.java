@@ -1,5 +1,6 @@
 package com.mycroft.bloquearsites;
 
+import android.graphics.Rect;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.util.ArrayDeque;
@@ -26,6 +27,7 @@ public final class UrlExtractor {
 
     private static final String[] SAMSUNG_ID_MARKERS = {
             "location_bar",
+            "location__bar",
             "locationbar",
             "location_edit",
             "location_text",
@@ -44,10 +46,21 @@ public final class UrlExtractor {
             "toolbar_url"
     };
 
+    private static final String[] SAMSUNG_SEMANTIC_MARKERS = {
+            "url",
+            "address",
+            "endereco",
+            "endereço",
+            "search",
+            "pesquisar",
+            "keyword",
+            "palavra-chave"
+    };
+
     public String extract(AccessibilityNodeInfo root, AccessibilityNodeInfo eventSource, String packageName) {
         if (root == null) {
             if (isSamsungPackage(packageName)) {
-                String samsung = extractSamsungFromNode(eventSource);
+                String samsung = extractSamsungFromNode(eventSource, null);
                 if (samsung != null) return samsung;
             }
             return extractFromNodeIfAddressLike(eventSource);
@@ -98,7 +111,7 @@ public final class UrlExtractor {
     }
 
     private String extractSamsung(AccessibilityNodeInfo root, AccessibilityNodeInfo eventSource) {
-        String fromEvent = extractSamsungFromNode(eventSource);
+        String fromEvent = extractSamsungFromNode(eventSource, root);
         if (fromEvent != null) return fromEvent;
 
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
@@ -109,7 +122,7 @@ public final class UrlExtractor {
             AccessibilityNodeInfo node = queue.removeFirst();
             visited++;
 
-            String candidate = extractSamsungFromNode(node);
+            String candidate = extractSamsungFromNode(node, root);
             if (candidate != null) return candidate;
 
             int childCount = node.getChildCount();
@@ -121,7 +134,10 @@ public final class UrlExtractor {
         return null;
     }
 
-    private String extractSamsungFromNode(AccessibilityNodeInfo node) {
+    private String extractSamsungFromNode(
+            AccessibilityNodeInfo node,
+            AccessibilityNodeInfo root
+    ) {
         if (node == null) return null;
 
         String value = nodeText(node);
@@ -131,16 +147,65 @@ public final class UrlExtractor {
             return value;
         }
 
+        CharSequence nodePackage = node.getPackageName();
+        if (nodePackage == null || !isSamsungPackage(nodePackage.toString())) {
+            return null;
+        }
+
+        if (hasSamsungAddressSemantics(node)) {
+            return value;
+        }
+
         CharSequence className = node.getClassName();
         String classNameString = className == null ? "" : className.toString();
-        if (classNameString.endsWith("EditText") && (node.isEditable() || node.isFocused())) {
-            CharSequence packageName = node.getPackageName();
-            if (packageName != null && isSamsungPackage(packageName.toString())) {
-                return value;
-            }
+        if (classNameString.endsWith("EditText") && isSamsungAddressBarGeometry(node, root)) {
+            return value;
         }
 
         return null;
+    }
+
+    private boolean isSamsungAddressBarGeometry(
+            AccessibilityNodeInfo node,
+            AccessibilityNodeInfo root
+    ) {
+        if (node == null || node.isPassword() || !node.isVisibleToUser()) return false;
+
+        // Sem a raiz ainda aceitamos um EditText do próprio Samsung como último recurso.
+        if (root == null) return true;
+
+        Rect rootBounds = new Rect();
+        Rect nodeBounds = new Rect();
+        root.getBoundsInScreen(rootBounds);
+        node.getBoundsInScreen(nodeBounds);
+
+        if (rootBounds.width() <= 0 || rootBounds.height() <= 0
+                || nodeBounds.width() <= 0 || nodeBounds.height() <= 0) {
+            return false;
+        }
+
+        boolean wideEnough = nodeBounds.width() >= Math.round(rootBounds.width() * 0.35f);
+        int centerY = nodeBounds.centerY();
+        int edgeBand = Math.round(rootBounds.height() * 0.30f);
+        boolean nearTop = centerY <= rootBounds.top + edgeBand;
+        boolean nearBottom = centerY >= rootBounds.bottom - edgeBand;
+
+        return wideEnough && (nearTop || nearBottom);
+    }
+
+    private boolean hasSamsungAddressSemantics(AccessibilityNodeInfo node) {
+        return containsSamsungSemanticMarker(node.getContentDescription())
+                || containsSamsungSemanticMarker(node.getHintText());
+    }
+
+    private boolean containsSamsungSemanticMarker(CharSequence value) {
+        if (value == null || value.length() == 0) return false;
+
+        String lower = value.toString().toLowerCase(Locale.ROOT);
+        for (String marker : SAMSUNG_SEMANTIC_MARKERS) {
+            if (lower.contains(marker)) return true;
+        }
+        return false;
     }
 
     private String extractFromNodeIfAddressLike(AccessibilityNodeInfo node) {
