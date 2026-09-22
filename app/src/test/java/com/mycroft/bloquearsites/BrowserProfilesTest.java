@@ -2,6 +2,8 @@ package com.mycroft.bloquearsites;
 
 import org.junit.Test;
 
+import java.util.Arrays;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
@@ -15,6 +17,21 @@ public class BrowserProfilesTest {
         assertNotNull(classic);
         assertNotNull(beta);
         assertNotSame(classic, beta);
-        assertEquals(beta.getAddressViewIds(), classic.getAddressViewIds());
+
+        assertEquals(
+                Arrays.asList(
+                        "mozac_browser_toolbar_edit_url_view",
+                        "mozac_browser_toolbar_url_view"
+                ),
+                classic.getAddressViewIds()
+        );
+
+        assertEquals(
+                Arrays.asList(
+                        "mozac_browser_toolbar_url_view",
+                        "mozac_browser_toolbar_edit_url_view"
+                ),
+                beta.getAddressViewIds()
+        );
     }
 }

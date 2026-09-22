@@ -29,8 +29,8 @@ public final class BrowserProfiles {
             ),
             new BrowserProfile(
                     new String[]{"org.mozilla.firefox"},
-                    "mozac_browser_toolbar_url_view",
-                    "mozac_browser_toolbar_edit_url_view"
+                    "mozac_browser_toolbar_edit_url_view",
+                    "mozac_browser_toolbar_url_view"
             ),
             new BrowserProfile(
                     new String[]{
