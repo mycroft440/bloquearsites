@@ -2,6 +2,7 @@ package com.mycroft.bloquearsites;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.os.Handler;
@@ -211,13 +212,17 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         return SAMSUNG_PACKAGE.equals(packageName) || SAMSUNG_BETA_PACKAGE.equals(packageName);
     }
 
+    private boolean isDebugBuild() {
+        return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
     private void logSamsungEvent(
             AccessibilityEvent event,
             AccessibilityNodeInfo source,
             AccessibilityNodeInfo root,
             String visibleUrl
     ) {
-        if (!BuildConfig.DEBUG) return;
+        if (!isDebugBuild()) return;
 
         String host = DomainMatcher.extractHost(visibleUrl);
         Log.d(
@@ -248,7 +253,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo root,
             String visibleUrl
     ) {
-        if (!BuildConfig.DEBUG) return;
+        if (!isDebugBuild()) return;
 
         String host = DomainMatcher.extractHost(visibleUrl);
         Log.d(
