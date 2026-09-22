@@ -22,6 +22,7 @@ import android.widget.TextView;
 final class BlockRedirectController {
     private static final String REDIRECT_URL = "https://google.com";
     private static final String REDIRECT_HOST = "google.com";
+    private static final String FIREFOX_PACKAGE = "org.mozilla.firefox";
     private static final String LOG_TAG = "BloquearSitesRedirect";
 
     private static final long REDIRECT_DEBOUNCE_MS = 1200L;
@@ -85,6 +86,11 @@ final class BlockRedirectController {
 
         showBlockCurtain();
         mainHandler.postDelayed(curtainTimeoutRunnable, CURTAIN_MAX_VISIBLE_MS);
+
+        if (FIREFOX_PACKAGE.equals(packageName)) {
+            escapeFirefoxBlockedPage();
+        }
+
         openGoogle();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
@@ -95,6 +101,13 @@ final class BlockRedirectController {
         redirectPackage = null;
         curtainVisibleUntil = 0L;
         hideBlockCurtain();
+    }
+
+    private void escapeFirefoxBlockedPage() {
+        boolean wentBack = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
+        if (!wentBack) {
+            service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+        }
     }
 
     private void openGoogle() {
@@ -238,6 +251,15 @@ final class BlockRedirectController {
 
     private void expireBlockCurtain() {
         curtainVisibleUntil = 0L;
+
+        // Se o Firefox não expôs a URL de destino para confirmação, não mantemos o serviço
+        // preso em modo de redirecionamento. O destino Google já é ignorado pela regra normal.
+        if (FIREFOX_PACKAGE.equals(redirectPackage)) {
+            mainHandler.removeCallbacks(redirectCheckRunnable);
+            redirectPackage = null;
+            redirectFailed = false;
+        }
+
         hideBlockCurtain();
     }
 
