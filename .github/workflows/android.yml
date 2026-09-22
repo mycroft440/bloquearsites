@@ -31,15 +31,15 @@ jobs:
         if: github.event_name == 'push'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: android
+          ANDROID_KEY_ALIAS: bloquearsites-debug
+          ANDROID_KEY_PASSWORD: android
         run: |
           set -euo pipefail
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Configure o repository secret ANDROID_KEYSTORE_BASE64 antes de gerar o APK atualizável."
+            exit 1
+          fi
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bloquearsites-signing.jks"
           keytool -list \
             -keystore "$RUNNER_TEMP/bloquearsites-signing.jks" \
@@ -50,9 +50,9 @@ jobs:
         if: github.event_name == 'push'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/bloquearsites-signing.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: android
+          ANDROID_KEY_ALIAS: bloquearsites-debug
+          ANDROID_KEY_PASSWORD: android
         run: gradle --stacktrace assembleDebug -PversionCode=${{ github.run_number }}
 
       - name: Publicar APK atualizável
