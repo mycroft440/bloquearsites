@@ -81,4 +81,4 @@ gradle assembleDebug
 
 O APK de debug será gerado em `app/build/outputs/apk/debug/app-debug.apk`.
 
-O workflow `.github/workflows/android.yml` também executa os testes e gera o APK de debug em cada push/PR (o APK não é publicado como artifact pelo workflow atual).
+O workflow `.github/workflows/android.yml` executa os testes, gera o APK de debug em cada push/PR e publica o arquivo como artifact `bloquearsites-debug` no GitHub Actions.
