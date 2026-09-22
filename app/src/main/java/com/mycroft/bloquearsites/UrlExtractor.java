@@ -10,6 +10,9 @@ import java.util.Locale;
 public final class UrlExtractor {
     private static final int MAX_GENERIC_NODES = 350;
     private static final int MAX_SAMSUNG_NODES = 500;
+    private static final int MAX_SAMSUNG_SOURCE_ANCESTORS = 12;
+    private static final int MAX_DIAGNOSTIC_NODES = 180;
+    private static final int MAX_DIAGNOSTIC_CANDIDATES = 10;
 
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
@@ -58,11 +61,11 @@ public final class UrlExtractor {
     };
 
     public String extract(AccessibilityNodeInfo root, AccessibilityNodeInfo eventSource, String packageName) {
+        if (isSamsungPackage(packageName)) {
+            return extractSamsungSourceFirst(root, eventSource, packageName);
+        }
+
         if (root == null) {
-            if (isSamsungPackage(packageName)) {
-                String samsung = extractSamsungFromNode(eventSource, null);
-                if (samsung != null) return samsung;
-            }
             return extractFromNodeIfAddressLike(eventSource);
         }
 
@@ -72,15 +75,63 @@ public final class UrlExtractor {
             if (profiled != null) return profiled;
         }
 
-        if (isSamsungPackage(packageName)) {
-            String samsung = extractSamsung(root, eventSource);
-            if (samsung != null) return samsung;
-        }
-
         String fromEvent = extractFromNodeIfAddressLike(eventSource);
         if (fromEvent != null) return fromEvent;
 
         return extractGeneric(root);
+    }
+
+    private String extractSamsungSourceFirst(
+            AccessibilityNodeInfo root,
+            AccessibilityNodeInfo eventSource,
+            String packageName
+    ) {
+        BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+
+        // Samsung Internet pode expor a barra na subárvore/ancestrais da fonte do evento
+        // antes de ela aparecer de forma estável em getRootInActiveWindow().
+        if (eventSource != null) {
+            String fromSource = extractSamsungFromSourceChain(eventSource, packageName, profile);
+            if (fromSource != null) return fromSource;
+        }
+
+        if (root == null) return null;
+
+        if (profile != null) {
+            String profiled = extractWithProfile(root, packageName, profile);
+            if (profiled != null) return profiled;
+        }
+
+        return extractSamsungTree(root);
+    }
+
+    private String extractSamsungFromSourceChain(
+            AccessibilityNodeInfo eventSource,
+            String packageName,
+            BrowserProfile profile
+    ) {
+        AccessibilityNodeInfo current = eventSource;
+
+        for (int depth = 0;
+             current != null && depth < MAX_SAMSUNG_SOURCE_ANCESTORS;
+             depth++) {
+
+            if (profile != null) {
+                String profiled = extractWithProfile(current, packageName, profile);
+                if (profiled != null) return profiled;
+            }
+
+            String directCandidate = extractSamsungFromNode(current, null, false);
+            if (directCandidate != null) return directCandidate;
+
+            try {
+                current = current.getParent();
+            } catch (RuntimeException ignored) {
+                current = null;
+            }
+        }
+
+        return null;
     }
 
     private String extractWithProfile(
@@ -88,6 +139,8 @@ public final class UrlExtractor {
             String packageName,
             BrowserProfile profile
     ) {
+        if (root == null || profile == null) return null;
+
         for (String idName : profile.getAddressViewIds()) {
             String exactId = packageName + ":id/" + idName;
             try {
@@ -104,16 +157,13 @@ public final class UrlExtractor {
     private String firstValidText(List<AccessibilityNodeInfo> nodes) {
         if (nodes == null) return null;
         for (AccessibilityNodeInfo node : nodes) {
-            String value = nodeText(node);
-            if (DomainMatcher.extractHost(value) != null) return value;
+            String value = firstUrlLikeValue(node);
+            if (value != null) return value;
         }
         return null;
     }
 
-    private String extractSamsung(AccessibilityNodeInfo root, AccessibilityNodeInfo eventSource) {
-        String fromEvent = extractSamsungFromNode(eventSource, root);
-        if (fromEvent != null) return fromEvent;
-
+    private String extractSamsungTree(AccessibilityNodeInfo root) {
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
@@ -122,7 +172,7 @@ public final class UrlExtractor {
             AccessibilityNodeInfo node = queue.removeFirst();
             visited++;
 
-            String candidate = extractSamsungFromNode(node, root);
+            String candidate = extractSamsungFromNode(node, root, true);
             if (candidate != null) return candidate;
 
             int childCount = node.getChildCount();
@@ -136,12 +186,13 @@ public final class UrlExtractor {
 
     private String extractSamsungFromNode(
             AccessibilityNodeInfo node,
-            AccessibilityNodeInfo root
+            AccessibilityNodeInfo root,
+            boolean allowGeometryFallback
     ) {
         if (node == null) return null;
 
-        String value = nodeText(node);
-        if (DomainMatcher.extractHost(value) == null) return null;
+        String value = firstUrlLikeValue(node);
+        if (value == null) return null;
 
         if (hasSamsungAddressLikeId(node)) {
             return value;
@@ -155,6 +206,8 @@ public final class UrlExtractor {
         if (hasSamsungAddressSemantics(node)) {
             return value;
         }
+
+        if (!allowGeometryFallback) return null;
 
         CharSequence className = node.getClassName();
         String classNameString = className == null ? "" : className.toString();
@@ -171,8 +224,7 @@ public final class UrlExtractor {
     ) {
         if (node == null || node.isPassword() || !node.isVisibleToUser()) return false;
 
-        // Sem a raiz ainda aceitamos um EditText do próprio Samsung como último recurso.
-        if (root == null) return true;
+        if (root == null) return false;
 
         Rect rootBounds = new Rect();
         Rect nodeBounds = new Rect();
@@ -210,8 +262,7 @@ public final class UrlExtractor {
 
     private String extractFromNodeIfAddressLike(AccessibilityNodeInfo node) {
         if (node == null || !hasAddressLikeId(node)) return null;
-        String value = nodeText(node);
-        return DomainMatcher.extractHost(value) != null ? value : null;
+        return firstUrlLikeValue(node);
     }
 
     private String extractGeneric(AccessibilityNodeInfo root) {
@@ -224,10 +275,8 @@ public final class UrlExtractor {
             visited++;
 
             if (hasAddressLikeId(node)) {
-                String value = nodeText(node);
-                if (DomainMatcher.extractHost(value) != null) {
-                    return value;
-                }
+                String value = firstUrlLikeValue(node);
+                if (value != null) return value;
             }
 
             int childCount = node.getChildCount();
@@ -239,15 +288,68 @@ public final class UrlExtractor {
         return null;
     }
 
-    private boolean hasSamsungAddressLikeId(AccessibilityNodeInfo node) {
-        String id = node.getViewIdResourceName();
-        if (id == null) return false;
+    String describeSamsungCandidates(AccessibilityNodeInfo root) {
+        if (root == null) return "<sem-no>";
 
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+        int candidates = 0;
+        StringBuilder summary = new StringBuilder();
+
+        while (!queue.isEmpty()
+                && visited < MAX_DIAGNOSTIC_NODES
+                && candidates < MAX_DIAGNOSTIC_CANDIDATES) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            visited++;
+
+            String id = node.getViewIdResourceName();
+            CharSequence className = node.getClassName();
+            String classNameString = className == null ? "" : className.toString();
+
+            boolean interestingId = id != null && isSamsungInterestingId(id);
+            boolean editText = classNameString.endsWith("EditText");
+
+            if (interestingId || editText) {
+                if (summary.length() > 0) summary.append("; ");
+                summary.append("id=").append(id == null ? "<sem-id>" : id)
+                        .append(",class=").append(classNameString)
+                        .append(",text=").append(hasText(node.getText()))
+                        .append(",desc=").append(hasText(node.getContentDescription()))
+                        .append(",hint=").append(hasText(node.getHintText()))
+                        .append(",visible=").append(node.isVisibleToUser())
+                        .append(",editable=").append(node.isEditable());
+                candidates++;
+            }
+
+            int childCount = node.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.addLast(child);
+            }
+        }
+
+        if (summary.length() == 0) {
+            return "<nenhum-candidato-em-" + visited + "-nos>";
+        }
+        return summary.toString();
+    }
+
+    private boolean hasText(CharSequence value) {
+        return value != null && value.length() > 0;
+    }
+
+    private boolean isSamsungInterestingId(String id) {
         String lower = id.toLowerCase(Locale.ROOT);
         for (String marker : SAMSUNG_ID_MARKERS) {
             if (lower.contains(marker)) return true;
         }
         return false;
+    }
+
+    private boolean hasSamsungAddressLikeId(AccessibilityNodeInfo node) {
+        String id = node.getViewIdResourceName();
+        return id != null && isSamsungInterestingId(id);
     }
 
     private boolean hasAddressLikeId(AccessibilityNodeInfo node) {
@@ -265,18 +367,21 @@ public final class UrlExtractor {
         return SAMSUNG_PACKAGE.equals(packageName) || SAMSUNG_BETA_PACKAGE.equals(packageName);
     }
 
-    private String nodeText(AccessibilityNodeInfo node) {
+    private String firstUrlLikeValue(AccessibilityNodeInfo node) {
         if (node == null) return null;
 
-        CharSequence text = node.getText();
-        if (text != null && text.length() > 0) {
-            return text.toString().trim();
-        }
+        String text = clean(node.getText());
+        if (DomainMatcher.extractHost(text) != null) return text;
 
-        CharSequence description = node.getContentDescription();
-        if (description != null && description.length() > 0) {
-            return description.toString().trim();
-        }
+        String description = clean(node.getContentDescription());
+        if (DomainMatcher.extractHost(description) != null) return description;
+
         return null;
+    }
+
+    private String clean(CharSequence value) {
+        if (value == null || value.length() == 0) return null;
+        String cleaned = value.toString().trim();
+        return cleaned.isEmpty() ? null : cleaned;
     }
 }
