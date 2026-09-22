@@ -47,6 +47,7 @@ import static org.robolectric.Shadows.shadowOf;
 public class SiteBlockAccessibilityServiceTest {
     private static final String CHROME = "com.android.chrome";
     private static final String SAMSUNG = "com.sec.android.app.sbrowser";
+    private static final String FIREFOX = "org.mozilla.firefox";
 
     private ServiceController<SiteBlockAccessibilityService> controller;
     private SiteBlockAccessibilityService service;
@@ -268,6 +269,48 @@ public class SiteBlockAccessibilityServiceTest {
     }
 
     @Test
+    public void firefoxProfilesStillBlockUsingTheirOriginalAddressViewIds() {
+        for (String packageName : new String[]{FIREFOX, "org.mozilla.firefox_beta",
+                "org.mozilla.fenix", "org.torproject.torbrowser"}) {
+            for (String id : new String[]{"mozac_browser_toolbar_url_view",
+                    "mozac_browser_toolbar_edit_url_view"}) {
+                AccessibilityNodeInfo root = firefoxAddressNode(packageName, id, "example.com");
+                shadowService.setWindows(Collections.singletonList(window(AccessibilityWindowInfo.TYPE_APPLICATION, root)));
+                shadowService.setRootInActiveWindow(root);
+                sendWindowEvent(packageName);
+                assertNotNull(curtain());
+                Intent intent = shadowService.getNextStartedActivity();
+                assertNotNull(intent);
+                assertEquals(packageName, intent.getPackage());
+                root.setText("https://www.google.com/");
+                advance(300);
+                assertNull(curtain());
+            }
+        }
+    }
+
+    @Test
+    public void firefoxBlocksAfterLeavingCoveredBrowserWhenActiveRootIsStillTheCurtain() {
+        visit(CHROME, "example.com");
+        shadowService.getNextStartedActivity();
+        AccessibilityNodeInfo firefoxRoot = firefoxAddressNode(
+                FIREFOX, "mozac_browser_toolbar_url_view", "example.com"
+        );
+        shadowService.setWindows(Collections.singletonList(
+                window(AccessibilityWindowInfo.TYPE_APPLICATION, firefoxRoot)
+        ));
+        shadowService.setRootInActiveWindow(addressNode(service.getPackageName(), "Página bloqueada"));
+
+        sendWindowEvent(FIREFOX);
+
+        Intent intent = shadowService.getNextStartedActivity();
+        assertNotNull("O evento do Firefox deve consultar a janela dele, não a raiz da cortina", intent);
+        assertEquals(FIREFOX, intent.getPackage());
+        assertEquals("https://google.com", intent.getDataString());
+        assertNotNull(curtain());
+    }
+
+    @Test
     public void interruptionDoesNotExposeThePageAndDestroyRemovesTheCoverAndCallbacks() {
         visit(CHROME, "example.com");
         LinearLayout original = curtain();
@@ -301,6 +344,19 @@ public class SiteBlockAccessibilityServiceTest {
         node.setViewIdResourceName(packageName + ":id/url_bar");
         node.setText(url);
         return node;
+    }
+
+    private AccessibilityNodeInfo firefoxAddressNode(String packageName, String id, String url) {
+        AccessibilityNodeInfo node = addressNode(packageName, url);
+        node.setViewIdResourceName(packageName + ":id/" + id);
+        return node;
+    }
+
+    private void sendWindowEvent(String packageName) {
+        AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+        event.setPackageName(packageName);
+        service.onAccessibilityEvent(event);
+        event.recycle();
     }
 
     private AccessibilityWindowInfo window(int type, AccessibilityNodeInfo root) {
