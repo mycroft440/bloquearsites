@@ -20,6 +20,8 @@ public class BrowserProfilesTest {
 
         assertEquals(
                 Arrays.asList(
+                        "url_edit_text",
+                        "url_bar_title",
                         "mozac_browser_toolbar_edit_url_view",
                         "mozac_browser_toolbar_url_view"
                 ),
