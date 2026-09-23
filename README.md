@@ -10,7 +10,7 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 4. Para navegadores conhecidos, o app procura primeiro IDs específicos da barra de endereço.
 5. Se o navegador não tiver um perfil conhecido ou o ID específico falhar, entra um fallback genérico que procura nós de acessibilidade cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
-7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com`. No Chrome e derivados (Android 11+), o endereço é digitado na própria barra, trocando o site da aba atual. Nos demais navegadores, ou se a barra não puder ser usada, o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
+7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com` na própria aba: toca na barra de endereço, digita o endereço, confere o texto e confirma com o Enter de acessibilidade (Android 11+). Se a barra não puder ser usada (Android 10 ou anterior, Custom Tabs, navegador não reconhecido ou barra não encontrada), o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 
@@ -20,8 +20,7 @@ O app deliberadamente **não declara permissão de Internet**. A lista e as URLs
 - Brave: perfil Chromium + fallback genérico
 - Microsoft Edge: perfil Chromium + fallback genérico
 - Vivaldi/Kiwi: perfil Chromium + fallback genérico
-- Firefox (`org.mozilla.firefox`): barra atual em Jetpack Compose (`ADDRESSBAR_URL_BOX`, com a URL lida da descrição de acessibilidade) e barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`). Só a barra de exibição é lida; o conteúdo da página (GeckoView) é ignorado
-- Firefox Beta/Nightly/Tor Browser: `mozac_browser_toolbar_url_view` e `mozac_browser_toolbar_edit_url_view`
+- Firefox, Firefox Beta, Nightly e Tor Browser: barra atual em Jetpack Compose (`ADDRESSBAR_URL_BOX`, com a URL lida da descrição de acessibilidade) e barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`). Só a barra de exibição é lida; o conteúdo da página (GeckoView) é ignorado
 - Samsung Internet: `location_bar_edit_text`
 - Opera/Opera Mini: `url_field`
 - DuckDuckGo: `omnibarTextInput`

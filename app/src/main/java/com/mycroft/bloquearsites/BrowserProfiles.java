@@ -27,24 +27,29 @@ public final class BrowserProfiles {
             "url_bar"
     );
 
+    private static final BrowserProfile FIREFOX = new BrowserProfile(
+            new String[]{"org.mozilla.firefox"},
+            "url_edit_text",
+            "url_bar_title",
+            "mozac_browser_toolbar_edit_url_view",
+            "mozac_browser_toolbar_url_view"
+    );
+
+    // Beta, Nightly e Tor Browser usam a mesma base do Firefox (Fenix).
+    private static final BrowserProfile FIREFOX_PRERELEASE = new BrowserProfile(
+            new String[]{
+                    "org.mozilla.firefox_beta",
+                    "org.mozilla.fenix",
+                    "org.torproject.torbrowser"
+            },
+            "mozac_browser_toolbar_url_view",
+            "mozac_browser_toolbar_edit_url_view"
+    );
+
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,
-            new BrowserProfile(
-                    new String[]{"org.mozilla.firefox"},
-                    "url_edit_text",
-                    "url_bar_title",
-                    "mozac_browser_toolbar_edit_url_view",
-                    "mozac_browser_toolbar_url_view"
-            ),
-            new BrowserProfile(
-                    new String[]{
-                            "org.mozilla.firefox_beta",
-                            "org.mozilla.fenix",
-                            "org.torproject.torbrowser"
-                    },
-                    "mozac_browser_toolbar_url_view",
-                    "mozac_browser_toolbar_edit_url_view"
-            ),
+            FIREFOX,
+            FIREFOX_PRERELEASE,
             new BrowserProfile(
                     new String[]{
                             "com.sec.android.app.sbrowser",
@@ -80,6 +85,10 @@ public final class BrowserProfiles {
 
     public static boolean isChromium(String packageName) {
         return CHROMIUM.matchesPackage(packageName);
+    }
+
+    public static boolean isFirefox(String packageName) {
+        return FIREFOX.matchesPackage(packageName) || FIREFOX_PRERELEASE.matchesPackage(packageName);
     }
 
     public static BrowserProfile forPackage(String packageName) {

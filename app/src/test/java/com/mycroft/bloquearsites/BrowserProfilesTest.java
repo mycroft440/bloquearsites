@@ -5,8 +5,10 @@ import org.junit.Test;
 import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertTrue;
 
 public class BrowserProfilesTest {
     @Test
@@ -35,5 +37,28 @@ public class BrowserProfilesTest {
                 ),
                 beta.getAddressViewIds()
         );
+    }
+
+    @Test
+    public void firefoxFamilySharesFirefoxHandling() {
+        assertTrue(BrowserProfiles.isFirefox("org.mozilla.firefox"));
+        assertTrue(BrowserProfiles.isFirefox("org.mozilla.firefox_beta"));
+        assertTrue(BrowserProfiles.isFirefox("org.mozilla.fenix"));
+        assertTrue(BrowserProfiles.isFirefox("org.torproject.torbrowser"));
+
+        assertFalse(BrowserProfiles.isFirefox("com.android.chrome"));
+        assertFalse(BrowserProfiles.isFirefox("com.sec.android.app.sbrowser"));
+        assertFalse(BrowserProfiles.isFirefox(null));
+    }
+
+    @Test
+    public void chromiumFamilyExcludesOtherEngines() {
+        assertTrue(BrowserProfiles.isChromium("com.android.chrome"));
+        assertTrue(BrowserProfiles.isChromium("com.brave.browser"));
+        assertTrue(BrowserProfiles.isChromium("com.microsoft.emmx"));
+
+        assertFalse(BrowserProfiles.isChromium("org.mozilla.firefox"));
+        assertFalse(BrowserProfiles.isChromium("com.sec.android.app.sbrowser"));
+        assertFalse(BrowserProfiles.isChromium(null));
     }
 }

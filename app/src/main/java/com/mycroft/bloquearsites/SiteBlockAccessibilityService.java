@@ -20,7 +20,6 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
     private static final long SAMSUNG_RETRY_DELAY_MS = 250L;
 
-    private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
@@ -41,6 +40,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private String lastBlockedKey = "";
     private long lastBlockedAt = 0L;
     private Runnable pendingFirefoxRetry;
+    private String pendingFirefoxPackage;
     private Runnable pendingSamsungRetry;
 
     @Override
@@ -85,24 +85,24 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
-        boolean firefoxClassic = isFirefoxClassicPackage(packageName);
+        boolean firefox = BrowserProfiles.isFirefox(packageName);
         boolean samsung = isSamsungPackage(packageName);
-        if (!firefoxClassic) cancelFirefoxRetry();
+        if (!firefox) cancelFirefoxRetry();
 
         // Firefox e Samsung podem sinalizar mudanças relevantes com tipos de evento diferentes
         // dos navegadores Chromium. Para eles, não descartamos eventos antes de ler a URL.
-        if (!samsung && !firefoxClassic && !isLegacyEventType(event.getEventType())) {
+        if (!samsung && !firefox && !isLegacyEventType(event.getEventType())) {
             return;
         }
 
         Set<String> blockedSites = store.getSet();
         if (blockedSites.isEmpty()) {
-            if (firefoxClassic) cancelFirefoxRetry();
+            if (firefox) cancelFirefoxRetry();
             if (samsung) cancelSamsungRetry();
             return;
         }
 
-        if (firefoxClassic) {
+        if (firefox) {
             // Texto digitado e sugestões nunca contam como URL navegada. Todo evento do Firefox
             // apenas inicia uma confirmação curta da URL exibida pela toolbar da janela ativa.
             scheduleFirefoxRetry(packageName);
@@ -148,8 +148,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         // O Firefox pode gerar eventos cuja fonte imediata pertence a uma janela auxiliar.
         // Se a fonte ou a janela ativa pertencem ao Firefox, priorizamos o navegador ativo.
-        if (isFirefoxClassicPackage(sourcePackage)) return sourcePackage;
-        if (isFirefoxClassicPackage(rootPackage)) return rootPackage;
+        if (BrowserProfiles.isFirefox(sourcePackage)) return sourcePackage;
+        if (BrowserProfiles.isFirefox(rootPackage)) return rootPackage;
 
         if (eventPackage != null) return eventPackage;
         if (sourcePackage != null) return sourcePackage;
@@ -183,9 +183,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
-        // Eventos sucessivos não reiniciam a sequência. A URL precisa aparecer estável na toolbar
-        // de exibição antes de ser considerada realmente carregada.
-        if (pendingFirefoxRetry != null) return;
+        // Eventos sucessivos do mesmo navegador não reiniciam a sequência. A URL precisa aparecer
+        // estável na toolbar de exibição antes de ser considerada realmente carregada.
+        if (pendingFirefoxRetry != null && expectedPackage.equals(pendingFirefoxPackage)) return;
+
+        cancelFirefoxRetry();
+        pendingFirefoxPackage = expectedPackage;
         scheduleFirefoxRetryAttempt(
                 expectedPackage,
                 FIREFOX_RETRY_ATTEMPTS,
@@ -384,10 +387,6 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     private int windowIdOf(AccessibilityNodeInfo node) {
         return node == null ? -1 : node.getWindowId();
-    }
-
-    private boolean isFirefoxClassicPackage(String packageName) {
-        return FIREFOX_CLASSIC_PACKAGE.equals(packageName);
     }
 
     private boolean isSamsungPackage(String packageName) {

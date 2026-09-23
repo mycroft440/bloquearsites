@@ -10,12 +10,10 @@ import java.util.Locale;
 public final class UrlExtractor {
     private static final int MAX_GENERIC_NODES = 350;
     private static final int MAX_SAMSUNG_NODES = 500;
-    private static final int MAX_FIREFOX_NODES = 800;
     private static final int MAX_SAMSUNG_SOURCE_ANCESTORS = 12;
     private static final int MAX_DIAGNOSTIC_NODES = 180;
     private static final int MAX_DIAGNOSTIC_CANDIDATES = 10;
 
-    private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
 
@@ -34,12 +32,6 @@ public final class UrlExtractor {
     private static final String[] FIREFOX_VIEW_DISPLAY_IDS = {
             "url_bar_title",
             "mozac_browser_toolbar_url_view"
-    };
-
-    // Toolbar em Jetpack Compose (Firefox atual): testTags expostas como resource-id, sem prefixo.
-    private static final String[] FIREFOX_COMPOSE_DISPLAY_TAGS = {
-            "ADDRESSBAR_URL_BOX",
-            "ADDRESSBAR_URL"
     };
 
     private static final String[] SAMSUNG_ID_MARKERS = {
@@ -79,7 +71,7 @@ public final class UrlExtractor {
             return extractSamsungSourceFirst(root, eventSource, packageName);
         }
 
-        if (isFirefoxClassicPackage(packageName)) {
+        if (BrowserProfiles.isFirefox(packageName)) {
             return extractFirefoxDisplayedUrl(root, packageName);
         }
 
@@ -123,31 +115,14 @@ public final class UrlExtractor {
             }
         }
 
-        // findAccessibilityNodeInfosByViewId só encontra Views reais, não os nós virtuais do
-        // Compose. A toolbar atual é localizada percorrendo a árvore pelo resource-id exposto.
-        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
-        queue.add(root);
-        int visited = 0;
-
-        while (!queue.isEmpty() && visited < MAX_FIREFOX_NODES) {
-            AccessibilityNodeInfo node = queue.removeFirst();
-            visited++;
-
-            if (isFirefoxWebContent(node)) continue;
-
-            if (hasFirefoxComposeDisplayTag(node)) {
-                String value = firefoxDisplayValue(node, packageName, expectedWindowId);
-                if (value != null) return value;
-            }
-
-            int childCount = node.getChildCount();
-            for (int i = 0; i < childCount; i++) {
-                AccessibilityNodeInfo child = node.getChild(i);
-                if (child != null) queue.addLast(child);
-            }
-        }
-
-        return null;
+        // Toolbar atual, em Compose.
+        AccessibilityNodeInfo composeUrl = FirefoxToolbarNodes.findFirst(root, node ->
+                (FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_BOX_TAG)
+                        || FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_TAG))
+                        && firefoxDisplayValue(node, packageName, expectedWindowId) != null);
+        return composeUrl == null
+                ? null
+                : firefoxDisplayValue(composeUrl, packageName, expectedWindowId);
     }
 
     private String firefoxDisplayValue(
@@ -168,26 +143,6 @@ public final class UrlExtractor {
         String fromText = FirefoxToolbarText.findUrl(node.getText());
         if (fromText != null) return fromText;
         return FirefoxToolbarText.findUrl(node.getContentDescription());
-    }
-
-    private boolean hasFirefoxComposeDisplayTag(AccessibilityNodeInfo node) {
-        String id = node.getViewIdResourceName();
-        if (id == null) return false;
-
-        for (String tag : FIREFOX_COMPOSE_DISPLAY_TAGS) {
-            if (id.equals(tag) || id.endsWith("/" + tag)) return true;
-        }
-        return false;
-    }
-
-    private boolean isFirefoxWebContent(AccessibilityNodeInfo node) {
-        CharSequence className = node.getClassName();
-        if (className == null) return false;
-
-        // O GeckoView expõe a página como "android.webkit.WebView". Links e textos do conteúdo
-        // nunca podem ser confundidos com a URL navegada.
-        String name = className.toString();
-        return "android.webkit.WebView".equals(name) || name.startsWith("org.mozilla.geckoview.");
     }
 
     private String extractSamsungSourceFirst(
@@ -407,12 +362,12 @@ public final class UrlExtractor {
         StringBuilder summary = new StringBuilder();
 
         while (!queue.isEmpty()
-                && visited < MAX_FIREFOX_NODES
+                && visited < FirefoxToolbarNodes.MAX_NODES
                 && candidates < MAX_DIAGNOSTIC_CANDIDATES) {
             AccessibilityNodeInfo node = queue.removeFirst();
             visited++;
 
-            if (isFirefoxWebContent(node)) continue;
+            if (FirefoxToolbarNodes.isWebContent(node)) continue;
 
             String id = node.getViewIdResourceName();
             if (id != null && isFirefoxToolbarLikeId(id)) {
@@ -525,10 +480,6 @@ public final class UrlExtractor {
             if (lower.contains(marker)) return true;
         }
         return false;
-    }
-
-    private boolean isFirefoxClassicPackage(String packageName) {
-        return FIREFOX_CLASSIC_PACKAGE.equals(packageName);
     }
 
     private boolean isSamsungPackage(String packageName) {

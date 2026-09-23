@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">Bloquear Sites</string>
     <string name="accessibility_service_name">Bloqueador de sites</string>
-    <string name="accessibility_service_description">Lê localmente a barra de endereço do navegador para impedir a abertura dos domínios que você adicionou à lista de bloqueio.</string>
+    <string name="accessibility_service_description">Lê localmente a barra de endereço do navegador para impedir a abertura dos domínios que você adicionou à lista de bloqueio. Ao detectar um deles, digita google.com na barra do navegador para trocar o site da aba.</string>
 </resources>

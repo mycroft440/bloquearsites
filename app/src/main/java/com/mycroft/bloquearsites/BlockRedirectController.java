@@ -22,7 +22,6 @@ import android.widget.TextView;
 final class BlockRedirectController {
     private static final String REDIRECT_URL = "https://google.com";
     private static final String REDIRECT_HOST = "google.com";
-    private static final String FIREFOX_PACKAGE = "org.mozilla.firefox";
     private static final String LOG_TAG = "BloquearSitesRedirect";
 
     private static final long REDIRECT_DEBOUNCE_MS = 1200L;
@@ -33,10 +32,12 @@ final class BlockRedirectController {
     private final AccessibilityService service;
     private final Handler mainHandler;
     private final UrlExtractor urlExtractor;
-    private final ChromiumAddressBarNavigator addressBarNavigator;
+    private final AddressBarNavigator addressBarNavigator;
 
     private WindowManager windowManager;
     private LinearLayout blockCurtain;
+    private WindowManager.LayoutParams curtainParams;
+    private boolean curtainPassThrough;
     private Button retryRedirectButton;
     private String redirectPackage;
     private boolean redirectFailed;
@@ -54,7 +55,7 @@ final class BlockRedirectController {
         this.service = service;
         this.mainHandler = mainHandler;
         this.urlExtractor = urlExtractor;
-        this.addressBarNavigator = new ChromiumAddressBarNavigator(service, mainHandler);
+        this.addressBarNavigator = new AddressBarNavigator(service, mainHandler);
         this.windowManager = (WindowManager) service.getSystemService(AccessibilityService.WINDOW_SERVICE);
     }
 
@@ -87,26 +88,26 @@ final class BlockRedirectController {
         lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
         curtainVisibleUntil = SystemClock.elapsedRealtime() + CURTAIN_MAX_VISIBLE_MS;
 
+        // Enquanto a barra é preenchida a cortina deixa toques passarem: no Firefox a edição só
+        // abre com um toque simulado, que a cortina interceptaria. Uma cortina nova já nasce assim,
+        // para não disputar com o toque a atualização da janela.
+        setCurtainPassThrough(true);
         showBlockCurtain();
         mainHandler.postDelayed(curtainTimeoutRunnable, CURTAIN_MAX_VISIBLE_MS);
 
-        if (FIREFOX_PACKAGE.equals(packageName)) {
-            escapeFirefoxBlockedPage();
-        }
-
-        // No Chrome e derivados, o Google é aberto na própria aba do site bloqueado. A checagem
+        // O Google é aberto na própria aba do site bloqueado, pela barra de endereço. A checagem
         // do destino só começa quando a barra terminar de ser preenchida.
-        if (BrowserProfiles.isChromium(packageName)
-                && addressBarNavigator.start(
-                        packageName,
-                        REDIRECT_URL,
-                        this::onAddressBarNavigationFinished)) {
+        if (addressBarNavigator.start(
+                packageName,
+                REDIRECT_URL,
+                this::onAddressBarNavigationFinished)) {
             lastRedirectAt = SystemClock.elapsedRealtime();
             updateRetryButton();
             return;
         }
 
-        openGoogle();
+        setCurtainPassThrough(false);
+        openGoogleInNewTab();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
 
@@ -119,6 +120,14 @@ final class BlockRedirectController {
         hideBlockCurtain();
     }
 
+    private void openGoogleInNewTab() {
+        // A aba nova não tira o site bloqueado da aba atual; no Firefox, Voltar sai dele antes.
+        if (BrowserProfiles.isFirefox(redirectPackage)) {
+            escapeFirefoxBlockedPage();
+        }
+        openGoogle();
+    }
+
     private void escapeFirefoxBlockedPage() {
         boolean wentBack = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
         if (!wentBack) {
@@ -128,11 +137,12 @@ final class BlockRedirectController {
 
     private void onAddressBarNavigationFinished(boolean submitted) {
         if (redirectPackage == null) return;
+        setCurtainPassThrough(false);
 
         // Se a barra não pôde ser usada, cai no comportamento antigo: Google em uma aba nova.
         if (!submitted) {
             lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
-            openGoogle();
+            openGoogleInNewTab();
         }
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
@@ -258,9 +268,13 @@ final class BlockRedirectController {
             );
             params.gravity = Gravity.TOP | Gravity.START;
             params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
+            if (curtainPassThrough) {
+                params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
 
             try {
                 windowManager.addView(blockCurtain, params);
+                curtainParams = params;
             } catch (RuntimeException e) {
                 blockCurtain = null;
                 retryRedirectButton = null;
@@ -269,6 +283,23 @@ final class BlockRedirectController {
         }
 
         updateRetryButton();
+    }
+
+    private void setCurtainPassThrough(boolean passThrough) {
+        curtainPassThrough = passThrough;
+        if (blockCurtain == null || curtainParams == null || windowManager == null) return;
+
+        if (passThrough) {
+            curtainParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        } else {
+            curtainParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        }
+
+        try {
+            windowManager.updateViewLayout(blockCurtain, curtainParams);
+        } catch (RuntimeException e) {
+            Log.w(LOG_TAG, "Não foi possível atualizar a cortina de bloqueio.", e);
+        }
     }
 
     private void updateRetryButton() {
@@ -284,7 +315,7 @@ final class BlockRedirectController {
 
         // Se o Firefox não expôs a URL de destino para confirmação, não mantemos o serviço
         // preso em modo de redirecionamento. O destino Google já é ignorado pela regra normal.
-        if (FIREFOX_PACKAGE.equals(redirectPackage)) {
+        if (BrowserProfiles.isFirefox(redirectPackage)) {
             mainHandler.removeCallbacks(redirectCheckRunnable);
             redirectPackage = null;
             redirectFailed = false;
@@ -309,6 +340,7 @@ final class BlockRedirectController {
         } catch (RuntimeException ignored) {
         } finally {
             blockCurtain = null;
+            curtainParams = null;
             retryRedirectButton = null;
         }
     }
