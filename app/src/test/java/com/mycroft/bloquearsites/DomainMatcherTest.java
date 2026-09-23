@@ -37,6 +37,18 @@ public class DomainMatcherTest {
     }
 
     @Test
+    public void ignoresInvisibleFormatCharacters() {
+        // Samsung Internet exibe "\u200E" + domínio na barra de endereço.
+        assertEquals("instagram.com", DomainMatcher.extractHost("\u200Einstagram.com"));
+        assertEquals(
+                "instagram.com",
+                DomainMatcher.findMatchedDomain("\u200Em.instagram.com", Arrays.asList("instagram.com"))
+        );
+        assertEquals("example.com", DomainMatcher.extractHost("\u202Aexample.com\u202C"));
+        assertNull(DomainMatcher.extractHost("\u200E"));
+    }
+
+    @Test
     public void normalizesInternationalizedDomains() {
         assertEquals("xn--bcher-kva.de", DomainMatcher.normalizeBlockedInput("https://bücher.de"));
     }

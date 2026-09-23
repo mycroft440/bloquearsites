@@ -1,64 +1,89 @@
 package com.mycroft.bloquearsites;
 
+import com.mycroft.bloquearsites.BrowserProfile.Method;
+
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class BrowserProfilesTest {
     @Test
-    public void firefoxClassicUsesIndependentProfile() {
-        BrowserProfile classic = BrowserProfiles.forPackage("org.mozilla.firefox");
-        BrowserProfile beta = BrowserProfiles.forPackage("org.mozilla.firefox_beta");
+    public void firefoxFamilySharesOneProfile() {
+        BrowserProfile firefox = BrowserProfiles.forPackage("org.mozilla.firefox");
 
-        assertNotNull(classic);
-        assertNotNull(beta);
-        assertNotSame(classic, beta);
+        assertEquals(Method.FIREFOX_TOOLBAR, firefox.getMethod());
+        assertSame(firefox, BrowserProfiles.forPackage("org.mozilla.firefox_beta"));
+        assertSame(firefox, BrowserProfiles.forPackage("org.mozilla.fenix"));
+        assertSame(firefox, BrowserProfiles.forPackage("org.torproject.torbrowser"));
 
-        assertEquals(
-                Arrays.asList(
-                        "url_edit_text",
-                        "url_bar_title",
-                        "mozac_browser_toolbar_edit_url_view",
-                        "mozac_browser_toolbar_url_view"
-                ),
-                classic.getAddressViewIds()
-        );
-
-        assertEquals(
-                Arrays.asList(
-                        "mozac_browser_toolbar_url_view",
-                        "mozac_browser_toolbar_edit_url_view"
-                ),
-                beta.getAddressViewIds()
-        );
-    }
-
-    @Test
-    public void firefoxFamilySharesFirefoxHandling() {
-        assertTrue(BrowserProfiles.isFirefox("org.mozilla.firefox"));
         assertTrue(BrowserProfiles.isFirefox("org.mozilla.firefox_beta"));
-        assertTrue(BrowserProfiles.isFirefox("org.mozilla.fenix"));
-        assertTrue(BrowserProfiles.isFirefox("org.torproject.torbrowser"));
-
         assertFalse(BrowserProfiles.isFirefox("com.android.chrome"));
-        assertFalse(BrowserProfiles.isFirefox("com.sec.android.app.sbrowser"));
         assertFalse(BrowserProfiles.isFirefox(null));
     }
 
     @Test
-    public void chromiumFamilyExcludesOtherEngines() {
-        assertTrue(BrowserProfiles.isChromium("com.android.chrome"));
-        assertTrue(BrowserProfiles.isChromium("com.brave.browser"));
-        assertTrue(BrowserProfiles.isChromium("com.microsoft.emmx"));
+    public void chromiumFamilyUsesUrlBar() {
+        BrowserProfile chrome = BrowserProfiles.forPackage("com.android.chrome");
 
-        assertFalse(BrowserProfiles.isChromium("org.mozilla.firefox"));
+        assertEquals(Method.VIEW_ID, chrome.getMethod());
+        assertEquals(Collections.singletonList("url_bar"), chrome.getAddressViewIds());
+        assertSame(chrome, BrowserProfiles.forPackage("com.brave.browser"));
+        assertSame(chrome, BrowserProfiles.forPackage("com.microsoft.emmx"));
+
+        assertTrue(BrowserProfiles.isChromium("com.kiwibrowser.browser"));
         assertFalse(BrowserProfiles.isChromium("com.sec.android.app.sbrowser"));
         assertFalse(BrowserProfiles.isChromium(null));
+    }
+
+    @Test
+    public void samsungUsesItsRealBarIdsAndRereads() {
+        BrowserProfile samsung = BrowserProfiles.forPackage("com.sec.android.app.sbrowser");
+
+        assertEquals(Method.VIEW_ID_WITH_REREAD, samsung.getMethod());
+        assertTrue(samsung.rereadsAfterEvent());
+        assertEquals(
+                Arrays.asList("location_bar_edit_text", "compact_url_text"),
+                samsung.getAddressViewIds()
+        );
+        assertSame(samsung, BrowserProfiles.forPackage("com.sec.android.app.sbrowser.beta"));
+    }
+
+    @Test
+    public void miBrowserSharesTheAospUrlInputView() {
+        BrowserProfile mi = BrowserProfiles.forPackage("com.mi.globalbrowser");
+
+        assertEquals(Method.VIEW_ID_WITH_REREAD, mi.getMethod());
+        assertEquals(Collections.singletonList("url"), mi.getAddressViewIds());
+        assertSame(mi, BrowserProfiles.forPackage("com.android.browser"));
+    }
+
+    @Test
+    public void viaIsFoundByToolbarStructure() {
+        BrowserProfile via = BrowserProfiles.forPackage("mark.via.gp");
+
+        assertEquals(Method.TOOLBAR_STRUCTURE, via.getMethod());
+        assertTrue(via.rereadsAfterEvent());
+        assertTrue(via.getAddressViewIds().isEmpty());
+        assertSame(via, BrowserProfiles.forPackage("mark.via"));
+    }
+
+    @Test
+    public void everyPackageBelongsToASingleFamily() {
+        Set<String> seen = new HashSet<>();
+        for (BrowserProfile profile : BrowserProfiles.all()) {
+            for (String packageName : profile.getPackageNames()) {
+                assertTrue("Pacote em duas famílias: " + packageName, seen.add(packageName));
+            }
+        }
+        assertNull(BrowserProfiles.forPackage("com.example.unknown"));
     }
 }

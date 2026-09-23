@@ -1,13 +1,22 @@
 package com.mycroft.bloquearsites;
 
+import com.mycroft.bloquearsites.BrowserProfile.Method;
+
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * Famílias de navegadores. Navegadores que expõem a barra de endereço do mesmo jeito ficam no
+ * mesmo perfil; uma diferença na forma de identificação pede um perfil próprio.
+ */
 public final class BrowserProfiles {
     private BrowserProfiles() {}
 
+    // Chromium: url_bar é um EditText que mostra a URL e vira o campo de edição ao ser tocado.
     private static final BrowserProfile CHROMIUM = new BrowserProfile(
+            "Chromium",
+            Method.VIEW_ID,
             new String[]{
                     "com.android.chrome",
                     "com.chrome.beta",
@@ -27,60 +36,87 @@ public final class BrowserProfiles {
             "url_bar"
     );
 
+    // Firefox e navegadores da mesma base (Fenix). A toolbar atual é Compose e é lida pelas
+    // testTags em FirefoxToolbarNodes; os IDs abaixo cobrem as toolbars antigas em View
+    // (Android Components e Fennec).
     private static final BrowserProfile FIREFOX = new BrowserProfile(
-            new String[]{"org.mozilla.firefox"},
-            "url_edit_text",
-            "url_bar_title",
-            "mozac_browser_toolbar_edit_url_view",
-            "mozac_browser_toolbar_url_view"
-    );
-
-    // Beta, Nightly e Tor Browser usam a mesma base do Firefox (Fenix).
-    private static final BrowserProfile FIREFOX_PRERELEASE = new BrowserProfile(
+            "Firefox",
+            Method.FIREFOX_TOOLBAR,
             new String[]{
+                    "org.mozilla.firefox",
                     "org.mozilla.firefox_beta",
                     "org.mozilla.fenix",
                     "org.torproject.torbrowser"
             },
             "mozac_browser_toolbar_url_view",
-            "mozac_browser_toolbar_edit_url_view"
+            "mozac_browser_toolbar_edit_url_view",
+            "url_bar_title",
+            "url_edit_text"
+    );
+
+    // Samsung Internet: location_bar_edit_text é o UrlBar (EditText) da barra completa; ao rolar a
+    // página, a barra compacta mostra o domínio em compact_url_text. O texto exibido começa com a
+    // marca invisível U+200E, descartada pelo DomainMatcher.
+    private static final BrowserProfile SAMSUNG = new BrowserProfile(
+            "Samsung Internet",
+            Method.VIEW_ID_WITH_REREAD,
+            new String[]{
+                    "com.sec.android.app.sbrowser",
+                    "com.sec.android.app.sbrowser.beta"
+            },
+            "location_bar_edit_text",
+            "compact_url_text"
+    );
+
+    // Mi Browser e navegadores da base AOSP (com.android.browser, usado pela MIUI): UrlInputView
+    // com ID url, que mostra a URL sem o esquema e vira o campo de edição ao ser tocado.
+    private static final BrowserProfile AOSP_BROWSER = new BrowserProfile(
+            "Mi Browser/AOSP",
+            Method.VIEW_ID_WITH_REREAD,
+            new String[]{
+                    "com.mi.globalbrowser",
+                    "com.android.browser"
+            },
+            "url"
+    );
+
+    private static final BrowserProfile OPERA = new BrowserProfile(
+            "Opera",
+            Method.VIEW_ID,
+            new String[]{
+                    "com.opera.browser",
+                    "com.opera.browser.beta",
+                    "com.opera.mini.native"
+            },
+            "url_field"
+    );
+
+    private static final BrowserProfile DUCKDUCKGO = new BrowserProfile(
+            "DuckDuckGo",
+            Method.VIEW_ID,
+            new String[]{"com.duckduckgo.mobile.android"},
+            "omnibarTextInput"
+    );
+
+    // Via: IDs ofuscados que mudam a cada versão. Por padrão a barra mostra o título da página;
+    // a URL só fica visível com "Conteúdo do campo de URL" em URL ou Domínio.
+    private static final BrowserProfile VIA = new BrowserProfile(
+            "Via",
+            Method.TOOLBAR_STRUCTURE,
+            new String[]{
+                    "mark.via.gp",
+                    "mark.via"
+            }
     );
 
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,
             FIREFOX,
-            FIREFOX_PRERELEASE,
-            new BrowserProfile(
-                    new String[]{
-                            "com.sec.android.app.sbrowser",
-                            "com.sec.android.app.sbrowser.beta"
-                    },
-                    "location_bar_edit_text",
-                    "location__bar_edit_text",
-                    "location_bar",
-                    "location__bar",
-                    "location_bar_text",
-                    "location_bar_url_text",
-                    "url_bar",
-                    "url_bar_text",
-                    "address_bar",
-                    "address_bar_edit_text",
-                    "search_url_text",
-                    "toolbar_url",
-                    "toolbar_url_text"
-            ),
-            new BrowserProfile(
-                    new String[]{
-                            "com.opera.browser",
-                            "com.opera.browser.beta",
-                            "com.opera.mini.native"
-                    },
-                    "url_field"
-            ),
-            new BrowserProfile(
-                    new String[]{"com.duckduckgo.mobile.android"},
-                    "omnibarTextInput"
-            )
+            SAMSUNG,
+            AOSP_BROWSER,
+            OPERA,
+            DUCKDUCKGO,
+            VIA
     ));
 
     public static boolean isChromium(String packageName) {
@@ -88,7 +124,7 @@ public final class BrowserProfiles {
     }
 
     public static boolean isFirefox(String packageName) {
-        return FIREFOX.matchesPackage(packageName) || FIREFOX_PRERELEASE.matchesPackage(packageName);
+        return FIREFOX.matchesPackage(packageName);
     }
 
     public static BrowserProfile forPackage(String packageName) {
@@ -96,5 +132,9 @@ public final class BrowserProfiles {
             if (profile.matchesPackage(packageName)) return profile;
         }
         return null;
+    }
+
+    static List<BrowserProfile> all() {
+        return PROFILES;
     }
 }

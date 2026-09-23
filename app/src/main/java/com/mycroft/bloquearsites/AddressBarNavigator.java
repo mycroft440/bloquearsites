@@ -21,7 +21,8 @@ import java.util.List;
  * bloqueada.
  *
  * Fluxo: tocar na barra, digitar o destino, conferir o texto e confirmar com o Enter de
- * acessibilidade. Os IDs vêm do perfil de cada navegador; o Firefox atual usa testTags do Compose.
+ * acessibilidade. A barra é localizada pelo método da família do navegador: IDs do perfil, testTags
+ * do Compose (Firefox) ou a estrutura da tela (Via).
  */
 final class AddressBarNavigator {
     interface Callback {
@@ -69,7 +70,7 @@ final class AddressBarNavigator {
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
 
-        // Chrome, Samsung, Opera e DuckDuckGo exibem a URL no próprio campo editável.
+        // Chrome, Samsung, Mi Browser, Opera e DuckDuckGo exibem a URL no próprio campo editável.
         AccessibilityNodeInfo editField = findEditField(root);
         if (editField != null) {
             if (!editField.isFocused()
@@ -81,7 +82,7 @@ final class AddressBarNavigator {
             // Nos Custom Tabs do Chrome o url_bar é só leitura, e tocar nele não abre edição.
             if (BrowserProfiles.isChromium(packageName)) return false;
 
-            // O Firefox exibe a URL num elemento só de leitura; tocar nele abre o campo de edição.
+            // Firefox e Via exibem a URL num elemento só de leitura; tocar nele abre a edição.
             AccessibilityNodeInfo display = findDisplay(root);
             if (display == null
                     || !(display.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tap(display))) {
@@ -177,24 +178,34 @@ final class AddressBarNavigator {
     private AccessibilityNodeInfo findEditField(AccessibilityNodeInfo root) {
         if (root == null) return null;
 
-        AccessibilityNodeInfo byId = findByProfileIds(root, true);
-        if (byId != null) return byId;
-
-        if (!BrowserProfiles.isFirefox(packageName)) return null;
-        return FirefoxToolbarNodes.findFirst(root, node ->
-                FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.SEARCH_BOX_TAG)
-                        && node.isEditable()
-                        && isUsable(node));
+        switch (profile.getMethod()) {
+            case TOOLBAR_STRUCTURE:
+                return ToolbarStructure.findEditField(root, packageName);
+            case FIREFOX_TOOLBAR:
+                AccessibilityNodeInfo viewField = findByProfileIds(root, true);
+                if (viewField != null) return viewField;
+                return NodeSearch.findFirst(root, node ->
+                        FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.SEARCH_BOX_TAG)
+                                && node.isEditable()
+                                && NodeSearch.isVisibleInPackage(node, packageName));
+            default:
+                return findByProfileIds(root, true);
+        }
     }
 
     private AccessibilityNodeInfo findDisplay(AccessibilityNodeInfo root) {
-        if (BrowserProfiles.isFirefox(packageName)) {
-            AccessibilityNodeInfo composeUrl = FirefoxToolbarNodes.findFirst(root, node ->
-                    FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_BOX_TAG)
-                            && isUsable(node));
-            if (composeUrl != null) return composeUrl;
+        switch (profile.getMethod()) {
+            case TOOLBAR_STRUCTURE:
+                return ToolbarStructure.findUrlDisplay(root, packageName);
+            case FIREFOX_TOOLBAR:
+                AccessibilityNodeInfo composeUrl = NodeSearch.findFirst(root, node ->
+                        FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_BOX_TAG)
+                                && NodeSearch.isVisibleInPackage(node, packageName));
+                if (composeUrl != null) return composeUrl;
+                return findByProfileIds(root, false);
+            default:
+                return findByProfileIds(root, false);
         }
-        return findByProfileIds(root, false);
     }
 
     private AccessibilityNodeInfo findByProfileIds(AccessibilityNodeInfo root, boolean editable) {
@@ -205,7 +216,7 @@ final class AddressBarNavigator {
                 if (nodes == null) continue;
 
                 for (AccessibilityNodeInfo node : nodes) {
-                    if (node == null || !isUsable(node)) continue;
+                    if (node == null || !NodeSearch.isVisibleInPackage(node, packageName)) continue;
                     if (!editable || node.isEditable()) return node;
                 }
             } catch (RuntimeException ignored) {
@@ -213,13 +224,6 @@ final class AddressBarNavigator {
             }
         }
         return null;
-    }
-
-    private boolean isUsable(AccessibilityNodeInfo node) {
-        CharSequence nodePackage = node.getPackageName();
-        return node.isVisibleToUser()
-                && nodePackage != null
-                && packageName.equals(nodePackage.toString());
     }
 
     private AccessibilityNodeInfo browserRoot() {

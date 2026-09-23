@@ -7,26 +7,32 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 1. O usuário adiciona um domínio, por exemplo `instagram.com`.
 2. O app normaliza e salva apenas o domínio localmente em `SharedPreferences`.
 3. Depois que o usuário consente e ativa manualmente o serviço nas Configurações de Acessibilidade do Android, o serviço observa mudanças da interface.
-4. Para navegadores conhecidos, o app procura primeiro IDs específicos da barra de endereço.
-5. Se o navegador não tiver um perfil conhecido ou o ID específico falhar, entra um fallback genérico que procura nós de acessibilidade cujo ID se parece com barra de URL/endereço.
+4. Para navegadores conhecidos, o app usa o método da família do navegador (veja abaixo) para achar a barra de endereço.
+5. Se o navegador não tiver uma família conhecida, entra um fallback genérico que procura nós de acessibilidade cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
 7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com` na própria aba: toca na barra de endereço, digita o endereço, confere o texto e confirma com o Enter de acessibilidade (Android 11+). Se a barra não puder ser usada (Android 10 ou anterior, Custom Tabs, navegador não reconhecido ou barra não encontrada), o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 
-## Perfis incluídos
+## Famílias de navegadores
 
-- Chrome e variantes Chromium: `url_bar`
-- Brave: perfil Chromium + fallback genérico
-- Microsoft Edge: perfil Chromium + fallback genérico
-- Vivaldi/Kiwi: perfil Chromium + fallback genérico
-- Firefox, Firefox Beta, Nightly e Tor Browser: barra atual em Jetpack Compose (`ADDRESSBAR_URL_BOX`, com a URL lida da descrição de acessibilidade) e barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`). Só a barra de exibição é lida; o conteúdo da página (GeckoView) é ignorado
-- Samsung Internet: `location_bar_edit_text`
-- Opera/Opera Mini: `url_field`
-- DuckDuckGo: `omnibarTextInput`
-- Navegadores não reconhecidos: perfil genérico de alta confiança baseado no ID do nó
+Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma família (`BrowserProfiles`), e cada família tem um método de identificação (`BrowserProfile.Method`). Uma diferença na forma de identificação pede uma família própria.
 
-Os IDs específicos são heurísticas de implementação dos navegadores e podem mudar em atualizações. Por isso o perfil genérico é mantido como fallback.
+| Família | Pacotes | Método | Como a barra é achada |
+|---|---|---|---|
+| Chromium | Chrome (estável/Beta/Dev/Canary), Brave, Edge, Vivaldi, Kiwi | `VIEW_ID` | `url_bar` (EditText) |
+| Firefox | Firefox, Firefox Beta, Nightly, Tor Browser | `FIREFOX_TOOLBAR` | barra em Jetpack Compose (`ADDRESSBAR_URL_BOX`, URL lida da descrição de acessibilidade) ou barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`); só a URL exibida conta, confirmada por leituras estáveis |
+| Samsung Internet | Samsung Internet e Beta | `VIEW_ID_WITH_REREAD` | `location_bar_edit_text` (UrlBar) e `compact_url_text` (barra compacta ao rolar); o domínio vem precedido da marca invisível U+200E |
+| Mi Browser/AOSP | Mi Browser (`com.mi.globalbrowser`) e navegadores da base AOSP (`com.android.browser`, usado pela MIUI) | `VIEW_ID_WITH_REREAD` | `url` (UrlInputView), com a URL sem o esquema |
+| Opera | Opera, Opera Beta, Opera Mini | `VIEW_ID` | `url_field` |
+| DuckDuckGo | DuckDuckGo | `VIEW_ID` | `omnibarTextInput` |
+| Via | `mark.via.gp`, `mark.via` | `TOOLBAR_STRUCTURE` | IDs ofuscados: TextView/EditText encostado no topo ou na base da janela, fora da página, com uma URL ou domínio inteiro |
+
+- `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
+- **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, ajuste no Via **Configurações → Conteúdo do campo de URL** para **URL** ou **Domínio**.
+- Navegadores não reconhecidos usam um fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…).
+
+Os IDs vêm dos APKs de cada navegador e podem mudar em atualizações.
 
 ## Segurança do matching
 

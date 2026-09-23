@@ -15,7 +15,7 @@ public final class DomainMatcher {
     public static String extractHost(String raw) {
         if (raw == null) return null;
 
-        String value = raw.trim();
+        String value = removeFormatCharacters(raw).trim();
         if (value.isEmpty() || containsWhitespace(value)) return null;
 
         value = value
@@ -143,6 +143,23 @@ public final class DomainMatcher {
             authority = authority.substring(0, colon);
         }
         return authority;
+    }
+
+    /**
+     * Remove caracteres invisíveis de formatação (categoria Unicode Cf), como a marca U+200E que o
+     * Samsung Internet coloca antes do domínio na barra. Eles quebram a conversão IDN do host.
+     */
+    private static String removeFormatCharacters(String value) {
+        StringBuilder cleaned = null;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.getType(c) == Character.FORMAT) {
+                if (cleaned == null) cleaned = new StringBuilder(value.substring(0, i));
+            } else if (cleaned != null) {
+                cleaned.append(c);
+            }
+        }
+        return cleaned == null ? value : cleaned.toString();
     }
 
     private static boolean containsWhitespace(String value) {
