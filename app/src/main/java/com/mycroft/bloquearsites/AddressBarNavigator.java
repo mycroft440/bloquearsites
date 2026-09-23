@@ -2,11 +2,13 @@ package com.mycroft.bloquearsites;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.util.Log;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
@@ -22,18 +24,28 @@ import java.util.List;
  *
  * Fluxo: tocar na barra, digitar o destino, conferir o texto e confirmar com o Enter de
  * acessibilidade. A barra é localizada pelo método da família do navegador: IDs do perfil, testTags
- * do Compose (Firefox) ou a estrutura da tela (Via).
+ * do Compose (Firefox) ou a estrutura da tela (Opera GX). Depois do toque, o campo de endereço
+ * também é achado como o campo editável com foco, porque alguns navegadores abrem uma tela de
+ * pesquisa própria para editar o endereço.
  */
 final class AddressBarNavigator {
     interface Callback {
-        void onFinished(boolean submitted);
+        /**
+         * @param submitted  se o destino foi digitado e confirmado
+         * @param touchedBar se a barra foi tocada; numa falha, o editor de endereço pode ter
+         *                   ficado aberto com o site bloqueado
+         */
+        void onFinished(boolean submitted, boolean touchedBar);
     }
 
     // Os navegadores trocam a barra para o modo de edição e processam o autocomplete de forma
-    // assíncrona.
+    // assíncrona; telas de pesquisa próprias podem levar mais tempo para aparecer.
     private static final long FOCUS_DELAY_MS = 300L;
+    private static final long RETRY_DELAY_MS = 250L;
+    private static final int MAX_FIND_ATTEMPTS = 5;
     private static final long SUBMIT_DELAY_MS = 300L;
     private static final long TAP_DURATION_MS = 50L;
+    private static final String LOG_TAG = "BloquearSitesRedirect";
 
     private final AccessibilityService service;
     private final Handler mainHandler;
@@ -43,6 +55,7 @@ final class AddressBarNavigator {
     private String url;
     private Callback callback;
     private Runnable pendingStep;
+    private boolean touchedBar;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -66,6 +79,7 @@ final class AddressBarNavigator {
         this.profile = browserProfile;
         this.url = url;
         this.callback = callback;
+        this.touchedBar = false;
 
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
@@ -82,15 +96,18 @@ final class AddressBarNavigator {
             // Nos Custom Tabs do Chrome o url_bar é só leitura, e tocar nele não abre edição.
             if (BrowserProfiles.isChromium(packageName)) return false;
 
-            // Firefox e Via exibem a URL num elemento só de leitura; tocar nele abre a edição.
+            // Firefox, Yandex e Opera GX exibem a URL num elemento só de leitura; tocar nele abre a
+            // edição.
             AccessibilityNodeInfo display = findDisplay(root);
             if (display == null
                     || !(display.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tap(display))) {
+                log("barra não encontrada ou não tocada");
                 return false;
             }
         }
 
-        schedule(this::typeUrl, FOCUS_DELAY_MS);
+        touchedBar = true;
+        schedule(() -> typeUrl(1), FOCUS_DELAY_MS);
         return true;
     }
 
@@ -121,37 +138,65 @@ final class AddressBarNavigator {
         return service.dispatchGesture(gesture, null, null);
     }
 
-    private void typeUrl() {
+    private void typeUrl(int attempt) {
         AccessibilityNodeInfo editField = findEditField(browserRoot());
         if (editField == null) {
-            finish(false);
+            if (attempt < MAX_FIND_ATTEMPTS) {
+                schedule(() -> typeUrl(attempt + 1), RETRY_DELAY_MS);
+            } else {
+                log("campo de edição não encontrado após " + attempt + " tentativas");
+                finish(false);
+            }
             return;
         }
 
         // Sem foco, o Chrome ignora o texto no autocomplete e o Enter não navegaria.
         if (!editField.isFocused()) editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
 
-        Bundle arguments = new Bundle();
-        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, url);
-        if (!editField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+        boolean typed = setText(editField);
+        log("campo " + describe(editField) + " setText=" + typed);
+        if (!typed) {
             finish(false);
             return;
         }
 
-        schedule(this::submit, SUBMIT_DELAY_MS);
+        schedule(() -> submit(false), SUBMIT_DELAY_MS);
     }
 
-    private void submit() {
-        // Se o navegador reescreveu a barra depois do foco, o Enter recarregaria o site bloqueado.
+    private void submit(boolean retyped) {
         AccessibilityNodeInfo editField = findEditField(browserRoot());
-        boolean submitted = editField != null
-                && hasTypedUrl(editField)
-                && (editField.isFocused()
-                        || editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
+        if (editField == null) {
+            log("campo sumiu antes do Enter");
+            finish(false);
+            return;
+        }
+
+        // Se o navegador reescreveu o campo depois de abri-lo (por exemplo, com a URL atual
+        // selecionada), o Enter recarregaria o site bloqueado: digita de novo uma vez.
+        if (!hasTypedUrl(editField)) {
+            if (!retyped && setText(editField)) {
+                log("texto não ficou no campo; digitando de novo");
+                schedule(() -> submit(true), SUBMIT_DELAY_MS);
+            } else {
+                log("texto não ficou no campo: " + describe(editField));
+                finish(false);
+            }
+            return;
+        }
+
+        boolean submitted = (editField.isFocused()
+                || editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                 && editField.performAction(
                         AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+        log("Enter=" + submitted);
         finish(submitted);
+    }
+
+    private boolean setText(AccessibilityNodeInfo editField) {
+        Bundle arguments = new Bundle();
+        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, url);
+        return editField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
     }
 
     private boolean hasTypedUrl(AccessibilityNodeInfo editField) {
@@ -172,12 +217,29 @@ final class AddressBarNavigator {
         Callback finished = callback;
         callback = null;
         pendingStep = null;
-        if (finished != null) finished.onFinished(submitted);
+        if (finished != null) finished.onFinished(submitted, touchedBar);
     }
 
     private AccessibilityNodeInfo findEditField(AccessibilityNodeInfo root) {
         if (root == null) return null;
 
+        AccessibilityNodeInfo known = findKnownEditField(root);
+        if (known != null || !touchedBar) return known;
+
+        // Depois do toque, o campo de endereço é o campo editável com foco, mesmo que o navegador
+        // o mostre numa tela de pesquisa própria; em último caso, o primeiro campo editável.
+        // Os dois ficam sempre fora do conteúdo da página.
+        AccessibilityNodeInfo focused = NodeSearch.findFirst(root, node ->
+                node.isFocused()
+                        && node.isEditable()
+                        && NodeSearch.isVisibleInPackage(node, packageName));
+        if (focused != null) return focused;
+
+        return NodeSearch.findFirst(root, node ->
+                node.isEditable() && NodeSearch.isVisibleInPackage(node, packageName));
+    }
+
+    private AccessibilityNodeInfo findKnownEditField(AccessibilityNodeInfo root) {
         switch (profile.getMethod()) {
             case TOOLBAR_STRUCTURE:
                 return ToolbarStructure.findEditField(root, packageName);
@@ -224,6 +286,20 @@ final class AddressBarNavigator {
             }
         }
         return null;
+    }
+
+    private String describe(AccessibilityNodeInfo node) {
+        CharSequence text = node.getText();
+        return "[id=" + node.getViewIdResourceName()
+                + " class=" + node.getClassName()
+                + " focado=" + node.isFocused()
+                + " host=" + DomainMatcher.extractHost(text == null ? null : text.toString())
+                + "]";
+    }
+
+    private void log(String message) {
+        if ((service.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
+        Log.d(LOG_TAG, packageName + ": " + message);
     }
 
     private AccessibilityNodeInfo browserRoot() {

@@ -28,6 +28,8 @@ final class BlockRedirectController {
     private static final long REDIRECT_CHECK_DELAY_MS = 250L;
     private static final long SHOW_RETRY_DELAY_MS = 5000L;
     private static final long CURTAIN_MAX_VISIBLE_MS = 3000L;
+    // Tempo para o Google aparecer depois da troca pela barra ou da aba nova.
+    private static final long REDIRECT_TIMEOUT_MS = 5000L;
 
     private final AccessibilityService service;
     private final Handler mainHandler;
@@ -43,6 +45,8 @@ final class BlockRedirectController {
     private boolean redirectFailed;
     private long lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
     private long curtainVisibleUntil = 0L;
+    private long redirectDeadline = 0L;
+    private boolean newTabFallbackUsed;
 
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
     private final Runnable curtainTimeoutRunnable = this::expireBlockCurtain;
@@ -85,8 +89,10 @@ final class BlockRedirectController {
         addressBarNavigator.cancel();
         redirectPackage = packageName;
         redirectFailed = false;
+        newTabFallbackUsed = false;
         lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
         curtainVisibleUntil = SystemClock.elapsedRealtime() + CURTAIN_MAX_VISIBLE_MS;
+        redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
 
         // Enquanto a barra é preenchida a cortina deixa toques passarem: no Firefox a edição só
         // abre com um toque simulado, que a cortina interceptaria. Uma cortina nova já nasce assim,
@@ -121,11 +127,22 @@ final class BlockRedirectController {
     }
 
     private void openGoogleInNewTab() {
+        newTabFallbackUsed = true;
+        redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
+
         // A aba nova não tira o site bloqueado da aba atual; no Firefox, Voltar sai dele antes.
         if (BrowserProfiles.isFirefox(redirectPackage)) {
             escapeFirefoxBlockedPage();
         }
         openGoogle();
+    }
+
+    /**
+     * Fecha o editor de endereço que a troca pela barra deixou aberto (no Opera GX, uma tela de
+     * pesquisa com o site bloqueado selecionado), para a aba nova não ficar escondida atrás dele.
+     */
+    private void closeAddressEditor() {
+        service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
     }
 
     private void escapeFirefoxBlockedPage() {
@@ -135,12 +152,16 @@ final class BlockRedirectController {
         }
     }
 
-    private void onAddressBarNavigationFinished(boolean submitted) {
+    private void onAddressBarNavigationFinished(boolean submitted, boolean touchedBar) {
         if (redirectPackage == null) return;
         setCurtainPassThrough(false);
 
-        // Se a barra não pôde ser usada, cai no comportamento antigo: Google em uma aba nova.
-        if (!submitted) {
+        if (submitted) {
+            redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
+        } else {
+            // Se a barra não pôde ser usada, fecha o editor que ficou aberto e cai no comportamento
+            // antigo: Google em uma aba nova.
+            if (touchedBar) closeAddressEditor();
             lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
             openGoogleInNewTab();
         }
@@ -181,10 +202,13 @@ final class BlockRedirectController {
 
         AccessibilityNodeInfo root = foregroundApplicationRoot();
         String packageName = packageNameOf(root);
+        boolean browserInFront = redirectPackage.equals(packageName);
 
-        if (redirectPackage.equals(packageName)) {
+        if (browserInFront) {
+            // Com o editor de endereço ainda aberto, google.com é só o texto digitado: a chegada
+            // só conta com a barra de volta ao modo de exibição.
             String visibleUrl = urlExtractor.extract(root, null, packageName);
-            if (isRedirectDestination(visibleUrl)) {
+            if (isRedirectDestination(visibleUrl) && !isEditingAddress(root, packageName)) {
                 finishRedirect();
                 return;
             }
@@ -194,8 +218,43 @@ final class BlockRedirectController {
             hideBlockCurtain();
         }
 
+        if (SystemClock.elapsedRealtime() >= redirectDeadline) {
+            handleRedirectTimeout(browserInFront);
+            return;
+        }
+
         updateRetryButton();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
+    }
+
+    /**
+     * O Google não apareceu a tempo. Se a troca pela barra falhou em silêncio (o Enter não
+     * navegou), tenta a aba nova; se a aba nova também falhou, ou o usuário saiu do navegador,
+     * libera a detecção, que volta a bloquear se o site continuar na tela.
+     */
+    private void handleRedirectTimeout(boolean browserInFront) {
+        if (browserInFront && !newTabFallbackUsed) {
+            Log.w(LOG_TAG, "Google não apareceu após a troca pela barra; abrindo aba nova.");
+            closeAddressEditor();
+            lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
+            openGoogleInNewTab();
+            mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
+            return;
+        }
+
+        Log.w(LOG_TAG, "Google não apareceu; liberando a detecção.");
+        mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        redirectPackage = null;
+        redirectFailed = false;
+        curtainVisibleUntil = 0L;
+        hideBlockCurtain();
+    }
+
+    private boolean isEditingAddress(AccessibilityNodeInfo root, String packageName) {
+        return NodeSearch.findFirst(root, node ->
+                node.isFocused()
+                        && node.isEditable()
+                        && NodeSearch.isVisibleInPackage(node, packageName)) != null;
     }
 
     private AccessibilityNodeInfo foregroundApplicationRoot() {
