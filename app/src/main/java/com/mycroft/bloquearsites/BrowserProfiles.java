@@ -7,26 +7,28 @@ import java.util.List;
 public final class BrowserProfiles {
     private BrowserProfiles() {}
 
+    private static final BrowserProfile CHROMIUM = new BrowserProfile(
+            new String[]{
+                    "com.android.chrome",
+                    "com.chrome.beta",
+                    "com.chrome.dev",
+                    "com.chrome.canary",
+                    "com.brave.browser",
+                    "com.brave.browser_beta",
+                    "com.brave.browser_nightly",
+                    "com.microsoft.emmx",
+                    "com.microsoft.emmx.beta",
+                    "com.microsoft.emmx.dev",
+                    "com.microsoft.emmx.canary",
+                    "com.vivaldi.browser",
+                    "com.vivaldi.browser.snapshot",
+                    "com.kiwibrowser.browser"
+            },
+            "url_bar"
+    );
+
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
-            new BrowserProfile(
-                    new String[]{
-                            "com.android.chrome",
-                            "com.chrome.beta",
-                            "com.chrome.dev",
-                            "com.chrome.canary",
-                            "com.brave.browser",
-                            "com.brave.browser_beta",
-                            "com.brave.browser_nightly",
-                            "com.microsoft.emmx",
-                            "com.microsoft.emmx.beta",
-                            "com.microsoft.emmx.dev",
-                            "com.microsoft.emmx.canary",
-                            "com.vivaldi.browser",
-                            "com.vivaldi.browser.snapshot",
-                            "com.kiwibrowser.browser"
-                    },
-                    "url_bar"
-            ),
+            CHROMIUM,
             new BrowserProfile(
                     new String[]{"org.mozilla.firefox"},
                     "url_edit_text",
@@ -75,6 +77,10 @@ public final class BrowserProfiles {
                     "omnibarTextInput"
             )
     ));
+
+    public static boolean isChromium(String packageName) {
+        return CHROMIUM.matchesPackage(packageName);
+    }
 
     public static BrowserProfile forPackage(String packageName) {
         for (BrowserProfile profile : PROFILES) {

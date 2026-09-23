@@ -10,7 +10,7 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 4. Para navegadores conhecidos, o app procura primeiro IDs específicos da barra de endereço.
 5. Se o navegador não tiver um perfil conhecido ou o ID específico falhar, entra um fallback genérico que procura nós de acessibilidade cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
-7. Ao detectar um domínio bloqueado, o serviço executa a ação global **Voltar** e mostra por um instante um banner de acessibilidade. Se a ação Voltar não estiver disponível, tenta ir para a tela inicial.
+7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com`. No Chrome e derivados (Android 11+), o endereço é digitado na própria barra, trocando o site da aba atual. Nos demais navegadores, ou se a barra não puder ser usada, o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 

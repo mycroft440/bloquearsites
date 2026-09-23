@@ -33,6 +33,7 @@ final class BlockRedirectController {
     private final AccessibilityService service;
     private final Handler mainHandler;
     private final UrlExtractor urlExtractor;
+    private final ChromiumAddressBarNavigator addressBarNavigator;
 
     private WindowManager windowManager;
     private LinearLayout blockCurtain;
@@ -53,6 +54,7 @@ final class BlockRedirectController {
         this.service = service;
         this.mainHandler = mainHandler;
         this.urlExtractor = urlExtractor;
+        this.addressBarNavigator = new ChromiumAddressBarNavigator(service, mainHandler);
         this.windowManager = (WindowManager) service.getSystemService(AccessibilityService.WINDOW_SERVICE);
     }
 
@@ -79,6 +81,7 @@ final class BlockRedirectController {
 
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        addressBarNavigator.cancel();
         redirectPackage = packageName;
         redirectFailed = false;
         lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
@@ -91,11 +94,24 @@ final class BlockRedirectController {
             escapeFirefoxBlockedPage();
         }
 
+        // No Chrome e derivados, o Google é aberto na própria aba do site bloqueado. A checagem
+        // do destino só começa quando a barra terminar de ser preenchida.
+        if (BrowserProfiles.isChromium(packageName)
+                && addressBarNavigator.start(
+                        packageName,
+                        REDIRECT_URL,
+                        this::onAddressBarNavigationFinished)) {
+            lastRedirectAt = SystemClock.elapsedRealtime();
+            updateRetryButton();
+            return;
+        }
+
         openGoogle();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
 
     void destroy() {
+        addressBarNavigator.cancel();
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         redirectPackage = null;
@@ -108,6 +124,17 @@ final class BlockRedirectController {
         if (!wentBack) {
             service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
         }
+    }
+
+    private void onAddressBarNavigationFinished(boolean submitted) {
+        if (redirectPackage == null) return;
+
+        // Se a barra não pôde ser usada, cai no comportamento antigo: Google em uma aba nova.
+        if (!submitted) {
+            lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
+            openGoogle();
+        }
+        mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
 
     private void openGoogle() {
@@ -138,6 +165,9 @@ final class BlockRedirectController {
     private void checkRedirectDestination() {
         mainHandler.removeCallbacks(redirectCheckRunnable);
         if (redirectPackage == null) return;
+
+        // Enquanto a barra é preenchida, ela já mostra google.com sem a navegação ter ocorrido.
+        if (addressBarNavigator.isRunning()) return;
 
         AccessibilityNodeInfo root = foregroundApplicationRoot();
         String packageName = packageNameOf(root);
@@ -264,6 +294,7 @@ final class BlockRedirectController {
     }
 
     private void finishRedirect() {
+        addressBarNavigator.cancel();
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         redirectPackage = null;
         curtainVisibleUntil = 0L;
