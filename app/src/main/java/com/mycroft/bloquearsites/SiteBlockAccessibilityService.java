@@ -3,6 +3,7 @@ package com.mycroft.bloquearsites;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.pm.ApplicationInfo;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -26,6 +27,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             "url_bar_title",
             "mozac_browser_toolbar_url_view"
     };
+    private static final String[] FIREFOX_DIAGNOSTIC_VIEW_IDS = {
+            "url_bar_title",
+            "url_edit_text",
+            "mozac_browser_toolbar_url_view",
+            "mozac_browser_toolbar_edit_url_view"
+    };
+    private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
     private static final String SAMSUNG_LOG_TAG = "BloquearSitesSamsung";
@@ -92,6 +100,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         boolean firefoxClassic = isFirefoxClassicPackage(packageName);
         boolean samsung = isSamsungPackage(packageName);
         if (!firefoxClassic) cancelFirefoxRetry();
+
+        if (firefoxClassic) {
+            logFirefoxEvent(event, source, root, packageName);
+        }
 
         // Firefox e Samsung podem sinalizar mudanças relevantes com tipos de evento diferentes
         // dos navegadores Chromium. Para eles, não descartamos eventos antes de ler a URL.
@@ -207,6 +219,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
 
+            int attemptNumber = FIREFOX_RETRY_ATTEMPTS - attemptsRemaining + 1;
             String nextHost = previousHost;
             int nextStableReads = stableReads;
 
@@ -230,6 +243,16 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                     nextStableReads = 1;
                 }
 
+                logFirefoxRetry(
+                        attemptNumber,
+                        attemptsRemaining,
+                        root,
+                        expectedPackage,
+                        loadedUrl,
+                        host,
+                        nextStableReads
+                );
+
                 if (loadedUrl != null
                         && nextStableReads >= FIREFOX_STABLE_READS_REQUIRED) {
                     handleVisibleUrl(expectedPackage, loadedUrl, blockedSites);
@@ -242,6 +265,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             } else {
                 nextHost = null;
                 nextStableReads = 0;
+                logFirefoxRetry(
+                        attemptNumber,
+                        attemptsRemaining,
+                        null,
+                        expectedPackage,
+                        null,
+                        null,
+                        0
+                );
             }
 
             if (attemptsRemaining > 1) {
@@ -305,6 +337,172 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         if (pendingFirefoxRetry == null) return;
         mainHandler.removeCallbacks(pendingFirefoxRetry);
         pendingFirefoxRetry = null;
+    }
+
+    private void logFirefoxEvent(
+            AccessibilityEvent event,
+            AccessibilityNodeInfo source,
+            AccessibilityNodeInfo activeRoot,
+            String packageName
+    ) {
+        AccessibilityNodeInfo selectedRoot = applicationRootForPackage(packageName);
+
+        Log.i(
+                FIREFOX_LOG_TAG,
+                "EVENT type=" + AccessibilityEvent.eventTypeToString(event.getEventType())
+                        + " eventWindow=" + event.getWindowId()
+                        + " eventPkg=" + safeValue(event.getPackageName())
+                        + " sourceWindow=" + windowIdOf(source)
+                        + " sourcePkg=" + packageNameOf(source)
+                        + " activeRootWindow=" + windowIdOf(activeRoot)
+                        + " activeRootPkg=" + packageNameOf(activeRoot)
+                        + " selectedRootWindow=" + windowIdOf(selectedRoot)
+                        + " selectedRootPkg=" + packageNameOf(selectedRoot)
+        );
+
+        logFirefoxNode("SOURCE", source);
+        logFirefoxWindows();
+        logFirefoxRootSnapshot("ACTIVE_ROOT", activeRoot, packageName);
+
+        if (selectedRoot == null || windowIdOf(selectedRoot) != windowIdOf(activeRoot)) {
+            logFirefoxRootSnapshot("SELECTED_ROOT", selectedRoot, packageName);
+        }
+    }
+
+    private void logFirefoxRetry(
+            int attemptNumber,
+            int attemptsRemaining,
+            AccessibilityNodeInfo root,
+            String packageName,
+            String loadedUrl,
+            String host,
+            int stableReads
+    ) {
+        Log.i(
+                FIREFOX_LOG_TAG,
+                "RETRY attempt=" + attemptNumber + "/" + FIREFOX_RETRY_ATTEMPTS
+                        + " remaining=" + attemptsRemaining
+                        + " rootWindow=" + windowIdOf(root)
+                        + " rootPkg=" + packageNameOf(root)
+                        + " loadedUrl=" + safeValue(loadedUrl)
+                        + " host=" + safeValue(host)
+                        + " stableReads=" + stableReads
+        );
+        logFirefoxRootSnapshot("RETRY_ROOT_" + attemptNumber, root, packageName);
+    }
+
+    private void logFirefoxWindows() {
+        try {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows == null || windows.isEmpty()) {
+                Log.i(FIREFOX_LOG_TAG, "WINDOWS <nenhuma>");
+                return;
+            }
+
+            for (AccessibilityWindowInfo window : windows) {
+                if (window == null) continue;
+                AccessibilityNodeInfo windowRoot = null;
+                try {
+                    windowRoot = window.getRoot();
+                } catch (RuntimeException ignored) {
+                    // Janela pode ser invalidada durante o diagnóstico.
+                }
+
+                Log.i(
+                        FIREFOX_LOG_TAG,
+                        "WINDOW id=" + window.getId()
+                                + " type=" + window.getType()
+                                + " active=" + window.isActive()
+                                + " focused=" + window.isFocused()
+                                + " rootWindow=" + windowIdOf(windowRoot)
+                                + " rootPkg=" + packageNameOf(windowRoot)
+                );
+            }
+        } catch (RuntimeException error) {
+            Log.i(FIREFOX_LOG_TAG, "WINDOWS erro=" + error.getClass().getSimpleName());
+        }
+    }
+
+    private void logFirefoxRootSnapshot(
+            String label,
+            AccessibilityNodeInfo root,
+            String packageName
+    ) {
+        if (root == null) {
+            Log.i(FIREFOX_LOG_TAG, label + " <sem-root>");
+            return;
+        }
+
+        logFirefoxNode(label, root);
+
+        for (String idName : FIREFOX_DIAGNOSTIC_VIEW_IDS) {
+            String exactId = packageName + ":id/" + idName;
+            try {
+                List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(exactId);
+                int count = nodes == null ? 0 : nodes.size();
+                Log.i(
+                        FIREFOX_LOG_TAG,
+                        label + " QUERY id=" + exactId + " count=" + count
+                );
+
+                if (nodes == null) continue;
+                for (int i = 0; i < nodes.size(); i++) {
+                    logFirefoxNode(label + " NODE[" + idName + "][" + i + "]", nodes.get(i));
+                }
+            } catch (RuntimeException error) {
+                Log.i(
+                        FIREFOX_LOG_TAG,
+                        label + " QUERY id=" + exactId
+                                + " erro=" + error.getClass().getSimpleName()
+                );
+            }
+        }
+    }
+
+    private void logFirefoxNode(String label, AccessibilityNodeInfo node) {
+        if (node == null) {
+            Log.i(FIREFOX_LOG_TAG, label + " <sem-no>");
+            return;
+        }
+
+        try {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+
+            Log.i(
+                    FIREFOX_LOG_TAG,
+                    label
+                            + " id=" + safeValue(node.getViewIdResourceName())
+                            + " class=" + safeValue(node.getClassName())
+                            + " pkg=" + safeValue(node.getPackageName())
+                            + " window=" + node.getWindowId()
+                            + " visible=" + node.isVisibleToUser()
+                            + " focused=" + node.isFocused()
+                            + " a11yFocused=" + node.isAccessibilityFocused()
+                            + " editable=" + node.isEditable()
+                            + " clickable=" + node.isClickable()
+                            + " focusable=" + node.isFocusable()
+                            + " text=" + safeValue(node.getText())
+                            + " desc=" + safeValue(node.getContentDescription())
+                            + " hint=" + safeValue(node.getHintText())
+                            + " bounds=" + bounds.flattenToString()
+            );
+        } catch (RuntimeException error) {
+            Log.i(
+                    FIREFOX_LOG_TAG,
+                    label + " erro=" + error.getClass().getSimpleName()
+            );
+        }
+    }
+
+    private String safeValue(Object value) {
+        if (value == null) return "<null>";
+        String cleaned = value.toString().replace('\n', ' ').replace('\r', ' ').trim();
+        if (cleaned.isEmpty()) return "<vazio>";
+        if (cleaned.length() > 300) {
+            return cleaned.substring(0, 300) + "…";
+        }
+        return cleaned;
     }
 
     private void scheduleSamsungRetry(String expectedPackage) {
