@@ -8,12 +8,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Reconhece derivados do Chromium e do Firefox que não estão na lista de pacotes.
+ * Reconhece navegadores que não estão na lista de pacotes, mas cuja barra o app consegue ler.
  *
- * Esses navegadores mantêm a barra de endereço da base (o url_bar do Chromium; a toolbar do
- * Android Components ou a testTag em Compose do Firefox). Quando ela aparece na tela de um
- * navegador desconhecido, ele passa a usar a família da base; o resultado fica salvo para as
- * próximas aberturas e para a tela do app.
+ * Derivados do Chromium e do Firefox mantêm a barra da base (o url_bar do Chromium; a toolbar do
+ * Android Components ou a testTag em Compose do Firefox) e passam a usar a família dela. Os demais
+ * entram na família genérica quando têm uma barra que o fallback genérico reconhece, ou quando o
+ * app consegue ler uma URL deles. O resultado fica salvo para as próximas aberturas e para a tela
+ * do app.
  */
 final class IdentifiedBrowsers {
     private static final String PREFS_NAME = "identified_browsers";
@@ -46,11 +47,14 @@ final class IdentifiedBrowsers {
             AccessibilityNodeInfo root
     ) {
         BrowserProfile family = probe(root, packageName);
-        if (family == null) return null;
+        if (family != null) remember(context, packageName, family);
+        return family;
+    }
 
+    /** Salva a família de um navegador desconhecido (por exemplo, depois de ler uma URL dele). */
+    static void remember(Context context, String packageName, BrowserProfile family) {
         BrowserProfiles.registerIdentified(packageName, family);
         prefs(context).edit().putString(packageName, family.getFamily()).apply();
-        return family;
     }
 
     private static BrowserProfile probe(AccessibilityNodeInfo root, String packageName) {
@@ -68,7 +72,12 @@ final class IdentifiedBrowsers {
                 (FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_BOX_TAG)
                         || FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.SEARCH_BOX_TAG))
                         && NodeSearch.isVisibleInPackage(node, packageName));
-        return composeToolbar == null ? null : BrowserProfiles.firefox();
+        if (composeToolbar != null) return BrowserProfiles.firefox();
+
+        AccessibilityNodeInfo genericBar = NodeSearch.findFirst(root, node ->
+                UrlExtractor.hasAddressLikeId(node)
+                        && NodeSearch.isVisibleInPackage(node, packageName));
+        return genericBar == null ? null : BrowserProfiles.generic();
     }
 
     private static boolean hasViewId(

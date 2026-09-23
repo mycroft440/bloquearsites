@@ -134,6 +134,18 @@ public final class BrowserProfiles {
             }
     ).withNote("parcial: bloqueia endereços digitados; links só se a barra mostrar a URL");
 
+    // Navegadores cuja barra é lida pelo fallback genérico de IDs (url_field, omnibar, address_bar…
+    // em UrlExtractor), sem família própria. O redirecionamento usa uma aba nova. Opera GX e Yandex
+    // foram confirmados em aparelho; outros navegadores entram aqui quando identificados.
+    private static final BrowserProfile GENERIC = new BrowserProfile(
+            "Genérico",
+            Method.VIEW_ID,
+            new String[]{
+                    "com.opera.gx",
+                    "com.yandex.browser"
+            }
+    ).withNote("leitura genérica da barra; o Google abre em aba nova");
+
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,
             FIREFOX,
@@ -142,7 +154,8 @@ public final class BrowserProfiles {
             OPERA,
             DUCKDUCKGO,
             VIA,
-            UC
+            UC,
+            GENERIC
     ));
 
     // Derivados reconhecidos pela barra na tela. Preenchido pelo IdentifiedBrowsers.
@@ -193,6 +206,10 @@ public final class BrowserProfiles {
 
     static BrowserProfile firefox() {
         return FIREFOX;
+    }
+
+    static BrowserProfile generic() {
+        return GENERIC;
     }
 
     static List<BrowserProfile> all() {

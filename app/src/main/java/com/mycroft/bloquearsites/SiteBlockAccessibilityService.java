@@ -21,6 +21,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
     private static final long REREAD_DELAY_MS = 250L;
     private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
+    private static final long UNSUPPORTED_BROWSER_GRACE_MS = 2000L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -43,6 +44,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private Runnable pendingFirefoxRetry;
     private String pendingFirefoxPackage;
     private Runnable pendingReread;
+    private Runnable pendingUnsupportedCheck;
+    private String pendingUnsupportedPackage;
     private String lastUnsupportedBrowser = "";
     private long lastUnsupportedBrowserAt = 0L;
 
@@ -112,16 +115,21 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (browserDetector == null) browserDetector = new BrowserDetector(this);
         if (profile == null && browserDetector.isBrowser(packageName)) {
-            // Derivados do Chromium e do Firefox mantêm a barra da base: reconhecidos na tela,
-            // passam a usar a família dela. Os demais navegadores não têm a barra lida e, enquanto
-            // houver sites bloqueados, são fechados para não servirem de desvio.
+            // Navegador fora da lista: suportado se o app consegue ler a barra dele (derivados do
+            // Chromium e do Firefox, barras reconhecidas pelo fallback genérico ou uma URL lida).
+            // Os demais, enquanto houver sites bloqueados, são fechados para não servirem de desvio.
             AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(root))
                     ? root
                     : applicationRootForPackage(packageName);
             profile = IdentifiedBrowsers.identify(this, packageName, browserRoot);
             if (profile == null) {
-                closeUnsupportedBrowser(packageName, browserRoot);
-                return;
+                String genericUrl = urlExtractor.extract(browserRoot, source, packageName);
+                if (genericUrl == null) {
+                    scheduleUnsupportedBrowserCheck(packageName, browserRoot);
+                    return;
+                }
+                profile = BrowserProfiles.generic();
+                IdentifiedBrowsers.remember(this, packageName, profile);
             }
 
             firefox = profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR;
@@ -202,11 +210,53 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         blockCurrentPage(packageName);
     }
 
-    private void closeUnsupportedBrowser(String packageName, AccessibilityNodeInfo browserRoot) {
+    /**
+     * Confere de novo, após um intervalo, um navegador cuja barra não foi lida. Só fecha se a
+     * página continua na tela e a barra continua ilegível: um navegador pode montar a barra depois
+     * do conteúdo.
+     */
+    private void scheduleUnsupportedBrowserCheck(
+            String packageName,
+            AccessibilityNodeInfo browserRoot
+    ) {
         // Sem página web na tela o app ainda não está navegando, ou não é de fato um navegador
         // (gerenciadores de download também abrem links).
         if (!NodeSearch.containsWebContent(browserRoot)) return;
+        if (pendingUnsupportedCheck != null && packageName.equals(pendingUnsupportedPackage)) return;
 
+        cancelUnsupportedBrowserCheck();
+        pendingUnsupportedPackage = packageName;
+        pendingUnsupportedCheck = () -> {
+            pendingUnsupportedCheck = null;
+            if (BrowserProfiles.forPackage(packageName) != null) return;
+
+            if (store == null) store = new BlockedSitesStore(this);
+            Set<String> blockedSites = store.getSet();
+            if (blockedSites.isEmpty()) return;
+
+            AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+            if (root == null || !NodeSearch.containsWebContent(root)) return;
+            if (IdentifiedBrowsers.identify(this, packageName, root) != null) return;
+
+            String url = urlExtractor.extract(root, null, packageName);
+            if (url != null) {
+                IdentifiedBrowsers.remember(this, packageName, BrowserProfiles.generic());
+                handleVisibleUrl(packageName, url, blockedSites);
+                return;
+            }
+
+            closeUnsupportedBrowser(packageName);
+        };
+        mainHandler.postDelayed(pendingUnsupportedCheck, UNSUPPORTED_BROWSER_GRACE_MS);
+    }
+
+    private void cancelUnsupportedBrowserCheck() {
+        if (pendingUnsupportedCheck == null) return;
+        mainHandler.removeCallbacks(pendingUnsupportedCheck);
+        pendingUnsupportedCheck = null;
+    }
+
+    private void closeUnsupportedBrowser(String packageName) {
         long now = SystemClock.elapsedRealtime();
         if (packageName.equals(lastUnsupportedBrowser)
                 && now - lastUnsupportedBrowserAt < UNSUPPORTED_BROWSER_DEBOUNCE_MS) {
@@ -457,12 +507,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     public void onInterrupt() {
         cancelFirefoxRetry();
         cancelReread();
+        cancelUnsupportedBrowserCheck();
     }
 
     @Override
     public void onDestroy() {
         cancelFirefoxRetry();
         cancelReread();
+        cancelUnsupportedBrowserCheck();
         if (redirectController != null) {
             redirectController.destroy();
             redirectController = null;

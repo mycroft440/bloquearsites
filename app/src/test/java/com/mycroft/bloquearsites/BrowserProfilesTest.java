@@ -94,6 +94,17 @@ public class BrowserProfilesTest {
     }
 
     @Test
+    public void operaGxAndYandexKeepTheGenericReading() {
+        BrowserProfile generic = BrowserProfiles.forPackage("com.opera.gx");
+
+        assertSame(BrowserProfiles.generic(), generic);
+        assertSame(generic, BrowserProfiles.forPackage("com.yandex.browser"));
+        assertEquals(Method.VIEW_ID, generic.getMethod());
+        assertTrue(generic.getAddressViewIds().isEmpty());
+        assertFalse(BrowserProfiles.isChromium("com.yandex.browser"));
+    }
+
+    @Test
     public void knownDerivativesAreListedInTheirBaseFamily() {
         assertTrue(BrowserProfiles.isChromium("org.cromite.cromite"));
         assertTrue(BrowserProfiles.isChromium("org.chromium.chrome"));

@@ -239,7 +239,8 @@ public final class UrlExtractor {
         return host == null ? "-" : host;
     }
 
-    private boolean hasAddressLikeId(AccessibilityNodeInfo node) {
+    /** ID com cara de barra de endereço, usado pelo fallback genérico. */
+    static boolean hasAddressLikeId(AccessibilityNodeInfo node) {
         String id = node.getViewIdResourceName();
         if (id == null) return false;
 

@@ -207,7 +207,7 @@ public final class MainActivity extends Activity {
             BrowserProfile profile = BrowserProfiles.forPackage(packageName);
             String status;
             if (profile == null) {
-                status = "verificado ao abrir: compatível se usar a base do Chrome ou do Firefox;"
+                status = "verificado ao abrir: compatível se o app conseguir ler a barra;"
                         + " senão, fechado enquanto houver sites bloqueados";
             } else if (BrowserProfiles.isIdentified(packageName)) {
                 status = "compatível (reconhecido como " + profile.getFamily() + ")";

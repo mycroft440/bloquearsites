@@ -28,18 +28,19 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 | DuckDuckGo | DuckDuckGo | `VIEW_ID` | `omnibarTextInput` |
 | Via | `mark.via.gp`, `mark.via` | `TOOLBAR_STRUCTURE` | IDs ofuscados: TextView/EditText encostado no topo ou na base da janela, fora da página, com uma URL ou domínio inteiro |
 | UC Browser | `com.UCMobile.intl`, `com.UCMobile` | `TOOLBAR_STRUCTURE` | barra exibida montada por código ofuscado; o campo de edição de endereço fica no topo |
+| Genérico | Opera GX, Yandex | `VIEW_ID` sem IDs próprios | fallback genérico de IDs (`url_field`, `omnibar`, `address_bar`…); o Google abre em aba nova |
 
 - `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
 - **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, nas configurações do Via mude **Conteúdo da caixa de URL** (em inglês, *URL field content*) de **Título** para **URL** ou **Domínio**. Com o título, só endereços digitados na barra são bloqueados.
 - **UC Browser:** endereços digitados na barra são bloqueados. Páginas abertas por links só são reconhecidas se a barra do UC mostrar a URL ou o domínio; se ela mostrar o título da página, não há URL a ler.
 - Os pacotes das famílias acima formam a lista de navegadores suportados.
-- **Derivados fora da lista** também são suportados: quando um navegador desconhecido mostra uma página, o app procura na tela a barra da base (`url_bar` do Chromium; `mozac_browser_toolbar_*` ou `ADDRESSBAR_URL_BOX`/`ADDRESSBAR_SEARCH_BOX` do Firefox). Reconhecido, ele passa a usar a família da base, e o resultado fica salvo (`IdentifiedBrowsers`).
+- **Navegadores fora da lista** também são suportados quando o app consegue ler a barra deles (`IdentifiedBrowsers`): derivados com a barra da base (`url_bar` do Chromium; `mozac_browser_toolbar_*` ou `ADDRESSBAR_URL_BOX`/`ADDRESSBAR_SEARCH_BOX` do Firefox) usam a família da base; barras reconhecidas pelo fallback genérico, ou uma URL lida com sucesso, levam à família Genérico. O resultado fica salvo.
 
 ## Navegadores sem suporte
 
 O app identifica como navegador todo app que abre um link `https` de qualquer site (`BrowserDetector`): o teste usa um domínio inexistente, então apps que só abrem links do próprio site (YouTube, redes sociais) não entram. O bloco `<queries>` do manifesto dá essa visibilidade no Android 11+, sem a permissão de ver todos os apps.
 
-Enquanto houver sites na lista, um navegador que não pertence a nenhuma família e não é reconhecido como derivado é fechado (ação **Início**, com um aviso) assim que mostra uma página web. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
+Enquanto houver sites na lista, um navegador cuja barra o app não consegue ler é fechado (ação **Início**, com um aviso). O fechamento só acontece com uma página web na tela e depois de uma nova tentativa de leitura 2 segundos depois, para não fechar um navegador que monta a barra após o conteúdo. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
 
 Apps que não são navegadores continuam passando pelo fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…), que cobre alguns navegadores embutidos em outros apps.
 
