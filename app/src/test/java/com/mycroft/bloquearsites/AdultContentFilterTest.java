@@ -85,7 +85,8 @@ public class AdultContentFilterTest {
 
     @Test
     public void oneAdultSiteInTheResultsIsNotEnough() {
-        List<String> results = Arrays.asList("Notícia sobre sites", "pornhub.com", "g1.globo.com");
+        // Um site sem "porn" nem "xxx" no nome: esses dois bloqueiam sozinhos.
+        List<String> results = Arrays.asList("Notícia sobre criadores", "onlyfans.com", "g1.globo.com");
 
         assertFalse(AdultContentFilter.isAdultPage(results, Collections.emptyList()));
     }
@@ -102,6 +103,29 @@ public class AdultContentFilterTest {
         List<String> page = Arrays.asList("Free videos", "MILF", "Hentai collection", "XXX");
 
         assertTrue(AdultContentFilter.isAdultPage(page, Collections.emptyList()));
+    }
+
+    @Test
+    public void pornOrXxxAloneBlocksThePage() {
+        assertTrue(AdultContentFilter.isAdultPage(
+                Arrays.asList("Notícias", "Os melhores vídeos pornô"), Collections.emptyList()));
+        assertTrue(AdultContentFilter.isAdultPage(
+                Arrays.asList("Galeria", "Fotos XXX 2024"), Collections.emptyList()));
+        assertTrue(AdultContentFilter.isAdultPage(
+                Collections.singletonList("Pornography"), Collections.emptyList()));
+        assertTrue(AdultContentFilter.isExplicitText("xxx"));
+        assertTrue(AdultContentFilter.isExplicitText("porn"));
+    }
+
+    @Test
+    public void formMasksWithXxxAreNotBlocked() {
+        List<String> form = Arrays.asList(
+                "CPF: xxx.xxx.xxx-xx",
+                "xxx.123.456-xx",
+                "Telefone (xx) xxxxx-xxxx",
+                "Cartão xxxx xxxx xxxx 1234");
+
+        assertFalse(AdultContentFilter.isAdultPage(form, Collections.singletonList("xxx.xxx.xxx-xx")));
     }
 
     @Test

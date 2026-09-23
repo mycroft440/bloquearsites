@@ -23,8 +23,9 @@ import java.util.regex.Pattern;
  * - o domínio: lista de sites adultos, trechos como "porn" e "xxx" e as terminações .xxx, .porn,
  *   .sex e .adult;
  * - o resto do endereço e a pesquisa feita: termos explícitos no caminho ou na busca;
- * - o texto da página: sites adultos citados nos resultados (o Google Imagens mostra a origem de
- *   cada imagem) ou vários termos explícitos diferentes na mesma página.
+ * - o texto da página: as palavras "porn" e "xxx" sozinhas, sites adultos citados nos resultados
+ *   (o Google Imagens mostra a origem de cada imagem) ou vários termos explícitos diferentes na
+ *   mesma página.
  *
  * Palavras comuns fora da pornografia (sexo, nude, pelada, naked) só contam dentro de expressões,
  * para não bloquear "sexo biológico", "batom nude" ou "pelada de futebol".
@@ -34,6 +35,12 @@ final class AdultContentFilter {
     static final int ADULT_SITES_IN_PAGE = 2;
     // Termos explícitos diferentes numa página a partir dos quais ela é bloqueada.
     static final int EXPLICIT_TERMS_IN_PAGE = 3;
+
+    // Termos que bloqueiam sozinhos em qualquer lugar, inclusive no texto da página: "porn" em
+    // qualquer palavra (porno, pornô, pornografia, pornhub) e a palavra "xxx".
+    private static final String PORN_STEM = "porn";
+    private static final String XXX_WORD = "xxx";
+    private static final Set<String> ALWAYS_BLOCKED_TERMS = set(PORN_STEM, XXX_WORD);
 
     // Sites de pornografia, webcams e plataformas de conteúdo adulto; vale para os subdomínios.
     // Sites fora da lista são pegos pelos trechos do domínio ou pelo texto da página.
@@ -95,7 +102,7 @@ final class AdultContentFilter {
     );
 
     // Radicais: contam em qualquer palavra que os contenha (porn, pornô, pornografia, pornhub...).
-    private static final String[] EXPLICIT_STEMS = {"porn", "hentai", "xvideo", "xnxx", "xhamster"};
+    private static final String[] EXPLICIT_STEMS = {PORN_STEM, "hentai", "xvideo", "xnxx", "xhamster"};
 
     // Expressões: as palavras isoladas são comuns fora da pornografia.
     private static final List<String[]> EXPLICIT_PHRASES = phrases(
@@ -178,7 +185,11 @@ final class AdultContentFilter {
                 String domain = matcher.group();
                 if (isAdultHost(domain)) adultSites.add(stripWww(domain));
             }
-            terms.addAll(explicitTerms(text));
+            Set<String> textTerms = explicitTerms(text);
+            for (String term : textTerms) {
+                if (ALWAYS_BLOCKED_TERMS.contains(term)) return true;
+            }
+            terms.addAll(textTerms);
 
             if (adultSites.size() >= ADULT_SITES_IN_PAGE) return true;
             if (terms.size() >= EXPLICIT_TERMS_IN_PAGE) return true;
@@ -204,8 +215,10 @@ final class AdultContentFilter {
 
         String[] words = normalize(text).split(" ");
         Set<String> found = new HashSet<>();
-        for (String word : words) {
+        for (int i = 0; i < words.length; i++) {
+            String word = words[i];
             if (word.isEmpty()) continue;
+            if (XXX_WORD.equals(word) && isMaskedField(words, i)) continue;
             if (EXPLICIT_WORDS.contains(word)) found.add(word);
             for (String stem : EXPLICIT_STEMS) {
                 if (word.contains(stem)) found.add(stem);
@@ -224,6 +237,37 @@ final class AdultContentFilter {
                 .replaceAll("\\p{M}+", "")
                 .toLowerCase(Locale.ROOT);
         return decomposed.replaceAll("[^a-z0-9]+", " ").trim();
+    }
+
+    /**
+     * "xxx" dentro de uma máscara de formulário, como o CPF "xxx.xxx.xxx-xx" ou "xxx.123.456-xx":
+     * ao lado de outro bloco só de x, ou de números com outro bloco de x no mesmo texto.
+     */
+    private static boolean isMaskedField(String[] words, int index) {
+        boolean anotherXBlock = false;
+        for (int i = 0; i < words.length; i++) {
+            if (i != index && isXBlock(words[i])) anotherXBlock = true;
+        }
+
+        for (int neighbor : new int[]{index - 1, index + 1}) {
+            if (neighbor < 0 || neighbor >= words.length) continue;
+            String word = words[neighbor];
+            if (isXBlock(word)) return true;
+            if (anotherXBlock && isDigits(word)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isXBlock(String word) {
+        return word.length() >= 2 && word.replace("x", "").isEmpty();
+    }
+
+    private static boolean isDigits(String word) {
+        if (word.isEmpty()) return false;
+        for (int i = 0; i < word.length(); i++) {
+            if (!Character.isDigit(word.charAt(i))) return false;
+        }
+        return true;
     }
 
     private static boolean containsPhrase(String[] words, String[] phrase) {
