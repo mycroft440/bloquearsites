@@ -27,9 +27,11 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 | Opera | Opera, Opera Beta, Opera Mini | `VIEW_ID` | `url_field` |
 | DuckDuckGo | DuckDuckGo | `VIEW_ID` | `omnibarTextInput` |
 | Via | `mark.via.gp`, `mark.via` | `TOOLBAR_STRUCTURE` | IDs ofuscados: TextView/EditText encostado no topo ou na base da janela, fora da página, com uma URL ou domínio inteiro |
+| UC Browser | `com.UCMobile.intl`, `com.UCMobile` | `TOOLBAR_STRUCTURE` | barra exibida montada por código ofuscado; o campo de edição de endereço fica no topo |
 
 - `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
 - **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, nas configurações do Via mude **Conteúdo da caixa de URL** (em inglês, *URL field content*) de **Título** para **URL** ou **Domínio**. Com o título, só endereços digitados na barra são bloqueados.
+- **UC Browser:** endereços digitados na barra são bloqueados. Páginas abertas por links só são reconhecidas se a barra do UC mostrar a URL ou o domínio; se ela mostrar o título da página, não há URL a ler.
 - Navegadores não reconhecidos usam um fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…).
 
 Os IDs vêm dos APKs de cada navegador e podem mudar em atualizações.

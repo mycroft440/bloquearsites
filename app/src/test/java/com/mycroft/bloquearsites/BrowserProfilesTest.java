@@ -77,6 +77,15 @@ public class BrowserProfilesTest {
     }
 
     @Test
+    public void ucBrowserIsFoundByToolbarStructureInItsOwnFamily() {
+        BrowserProfile uc = BrowserProfiles.forPackage("com.UCMobile.intl");
+
+        assertEquals(Method.TOOLBAR_STRUCTURE, uc.getMethod());
+        assertEquals("UC Browser", uc.getFamily());
+        assertSame(uc, BrowserProfiles.forPackage("com.UCMobile"));
+    }
+
+    @Test
     public void everyPackageBelongsToASingleFamily() {
         Set<String> seen = new HashSet<>();
         for (BrowserProfile profile : BrowserProfiles.all()) {

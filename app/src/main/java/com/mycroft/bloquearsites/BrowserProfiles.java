@@ -109,6 +109,18 @@ public final class BrowserProfiles {
             }
     );
 
+    // UC Browser: a barra exibida é montada por código ofuscado. A edição de endereço
+    // (SmartURLWindow) é um campo no topo; a barra exibida só identifica o site se mostrar a URL ou
+    // o domínio, e não o título da página.
+    private static final BrowserProfile UC = new BrowserProfile(
+            "UC Browser",
+            Method.TOOLBAR_STRUCTURE,
+            new String[]{
+                    "com.UCMobile.intl",
+                    "com.UCMobile"
+            }
+    );
+
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,
             FIREFOX,
@@ -116,7 +128,8 @@ public final class BrowserProfiles {
             AOSP_BROWSER,
             OPERA,
             DUCKDUCKGO,
-            VIA
+            VIA,
+            UC
     ));
 
     public static boolean isChromium(String packageName) {
