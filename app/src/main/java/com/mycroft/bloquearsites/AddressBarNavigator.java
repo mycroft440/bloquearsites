@@ -24,9 +24,12 @@ import java.util.List;
  *
  * Fluxo: tocar na barra, digitar o destino, conferir o texto e confirmar com o Enter de
  * acessibilidade. A barra é localizada pelo método da família do navegador: IDs do perfil, testTags
- * do Compose (Firefox) ou a estrutura da tela (Opera GX). Depois do toque, o campo de endereço
- * também é achado como o campo editável com foco, porque alguns navegadores abrem uma tela de
- * pesquisa própria para editar o endereço.
+ * do Compose (Firefox) ou a estrutura da tela (Opera GX).
+ *
+ * O Opera GX (família lida pela estrutura) abre uma tela de pesquisa própria para editar o
+ * endereço. Só para ele, o campo é achado também como o campo editável com foco, a busca é
+ * repetida enquanto a tela aparece e o texto é digitado de novo se o navegador o reescrever. Os
+ * demais navegadores seguem o fluxo direto, que já funcionava.
  */
 final class AddressBarNavigator {
     interface Callback {
@@ -39,10 +42,10 @@ final class AddressBarNavigator {
     }
 
     // Os navegadores trocam a barra para o modo de edição e processam o autocomplete de forma
-    // assíncrona; telas de pesquisa próprias podem levar mais tempo para aparecer.
+    // assíncrona; a tela de pesquisa do Opera GX pode levar mais tempo para aparecer.
     private static final long FOCUS_DELAY_MS = 300L;
     private static final long RETRY_DELAY_MS = 250L;
-    private static final int MAX_FIND_ATTEMPTS = 5;
+    private static final int SEARCH_SCREEN_FIND_ATTEMPTS = 5;
     private static final long SUBMIT_DELAY_MS = 300L;
     private static final long TAP_DURATION_MS = 50L;
     private static final String LOG_TAG = "BloquearSitesRedirect";
@@ -56,6 +59,7 @@ final class AddressBarNavigator {
     private Callback callback;
     private Runnable pendingStep;
     private boolean touchedBar;
+    private boolean searchScreen;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -80,6 +84,7 @@ final class AddressBarNavigator {
         this.url = url;
         this.callback = callback;
         this.touchedBar = false;
+        this.searchScreen = opensSearchScreen(browserProfile);
 
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
@@ -141,7 +146,7 @@ final class AddressBarNavigator {
     private void typeUrl(int attempt) {
         AccessibilityNodeInfo editField = findEditField(browserRoot());
         if (editField == null) {
-            if (attempt < MAX_FIND_ATTEMPTS) {
+            if (searchScreen && attempt < SEARCH_SCREEN_FIND_ATTEMPTS) {
                 schedule(() -> typeUrl(attempt + 1), RETRY_DELAY_MS);
             } else {
                 log("campo de edição não encontrado após " + attempt + " tentativas");
@@ -174,7 +179,7 @@ final class AddressBarNavigator {
         // Se o navegador reescreveu o campo depois de abri-lo (por exemplo, com a URL atual
         // selecionada), o Enter recarregaria o site bloqueado: digita de novo uma vez.
         if (!hasTypedUrl(editField)) {
-            if (!retyped && setText(editField)) {
+            if (searchScreen && !retyped && setText(editField)) {
                 log("texto não ficou no campo; digitando de novo");
                 schedule(() -> submit(true), SUBMIT_DELAY_MS);
             } else {
@@ -224,11 +229,10 @@ final class AddressBarNavigator {
         if (root == null) return null;
 
         AccessibilityNodeInfo known = findKnownEditField(root);
-        if (known != null || !touchedBar) return known;
+        if (known != null || !touchedBar || !searchScreen) return known;
 
-        // Depois do toque, o campo de endereço é o campo editável com foco, mesmo que o navegador
-        // o mostre numa tela de pesquisa própria; em último caso, o primeiro campo editável.
-        // Os dois ficam sempre fora do conteúdo da página.
+        // Na tela de pesquisa do Opera GX, o campo de endereço é o campo editável com foco; em
+        // último caso, o primeiro campo editável. Os dois ficam sempre fora do conteúdo da página.
         AccessibilityNodeInfo focused = NodeSearch.findFirst(root, node ->
                 node.isFocused()
                         && node.isEditable()
@@ -286,6 +290,11 @@ final class AddressBarNavigator {
             }
         }
         return null;
+    }
+
+    /** Navegadores que editam o endereço numa tela de pesquisa própria (Opera GX). */
+    static boolean opensSearchScreen(BrowserProfile profile) {
+        return profile != null && profile.getMethod() == BrowserProfile.Method.TOOLBAR_STRUCTURE;
     }
 
     private String describe(AccessibilityNodeInfo node) {
