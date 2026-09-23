@@ -10,6 +10,7 @@ import java.util.Locale;
 public final class UrlExtractor {
     private static final int MAX_GENERIC_NODES = 350;
     private static final int MAX_SAMSUNG_NODES = 500;
+    private static final int MAX_FIREFOX_NODES = 500;
     private static final int MAX_SAMSUNG_SOURCE_ANCESTORS = 12;
     private static final int MAX_FIREFOX_SOURCE_ANCESTORS = 8;
     private static final int MAX_DIAGNOSTIC_NODES = 180;
@@ -28,6 +29,18 @@ public final class UrlExtractor {
             "addressbar",
             "omnibar",
             "location_bar_edit"
+    };
+
+    private static final String[] FIREFOX_SEMANTIC_MARKERS = {
+            "url",
+            "address",
+            "endereco",
+            "endereço",
+            "search or enter",
+            "search or type",
+            "pesquisar ou digitar",
+            "pesquisar ou inserir",
+            "barra de endereço"
     };
 
     private static final String[] SAMSUNG_ID_MARKERS = {
@@ -95,15 +108,21 @@ public final class UrlExtractor {
         BrowserProfile profile = BrowserProfiles.forPackage(packageName);
         if (profile == null) return null;
 
-        // No Firefox clássico a árvore pode manter nós antigos da barra de endereço.
-        // Por isso só aceitamos nós visíveis da janela ativa e não usamos o fallback genérico.
+        // Primeiro tentamos os IDs conhecidos, tanto do Fennec quanto do Firefox moderno.
         if (eventSource != null) {
             String fromSource = extractFirefoxFromSourceChain(eventSource, packageName, profile);
             if (fromSource != null) return fromSource;
         }
 
         if (root == null) return null;
-        return extractWithVisibleProfile(root, packageName, profile);
+
+        String profiled = extractWithVisibleProfile(root, packageName, profile);
+        if (profiled != null) return profiled;
+
+        // Algumas versões/redesigns do Firefox deixam de expor viewId estável na toolbar.
+        // O fallback permanece restrito ao pacote Firefox e à geometria/semântica da barra,
+        // para não confundir URLs presentes no conteúdo da página com a URL navegada.
+        return extractFirefoxTree(root, packageName, profile);
     }
 
     private String extractFirefoxFromSourceChain(
@@ -152,10 +171,97 @@ public final class UrlExtractor {
                 String value = firstVisibleValidText(nodes, packageName, expectedWindowId);
                 if (value != null) return value;
             } catch (RuntimeException ignored) {
-                // O Firefox pode recriar a toolbar durante navegação; aguardamos o próximo evento.
+                // O Firefox pode recriar a toolbar durante navegação; os fallbacks cobrem isso.
             }
         }
         return null;
+    }
+
+    private String extractFirefoxTree(
+            AccessibilityNodeInfo root,
+            String packageName,
+            BrowserProfile profile
+    ) {
+        if (root == null) return null;
+
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+        int expectedWindowId = root.getWindowId();
+
+        while (!queue.isEmpty() && visited < MAX_FIREFOX_NODES) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            visited++;
+
+            if (isVisibleFirefoxNode(node, packageName, expectedWindowId)) {
+                String value = firstUrlLikeValue(node);
+                if (value != null
+                        && (hasExactProfileId(node, packageName, profile)
+                        || hasAddressLikeId(node)
+                        || hasFirefoxAddressSemantics(node)
+                        || isFirefoxAddressBarGeometry(node, root))) {
+                    return value;
+                }
+            }
+
+            int childCount = node.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.addLast(child);
+            }
+        }
+
+        return null;
+    }
+
+    private boolean hasFirefoxAddressSemantics(AccessibilityNodeInfo node) {
+        return containsFirefoxSemanticMarker(node.getContentDescription())
+                || containsFirefoxSemanticMarker(node.getHintText());
+    }
+
+    private boolean containsFirefoxSemanticMarker(CharSequence value) {
+        if (value == null || value.length() == 0) return false;
+
+        String lower = value.toString().toLowerCase(Locale.ROOT);
+        for (String marker : FIREFOX_SEMANTIC_MARKERS) {
+            if (lower.contains(marker)) return true;
+        }
+        return false;
+    }
+
+    private boolean isFirefoxAddressBarGeometry(
+            AccessibilityNodeInfo node,
+            AccessibilityNodeInfo root
+    ) {
+        if (node == null || root == null || node.isPassword() || !node.isVisibleToUser()) {
+            return false;
+        }
+
+        CharSequence className = node.getClassName();
+        String classNameString = className == null ? "" : className.toString();
+        boolean addressControl = node.isEditable()
+                || classNameString.endsWith("EditText")
+                || classNameString.endsWith("TextView");
+        if (!addressControl) return false;
+
+        Rect rootBounds = new Rect();
+        Rect nodeBounds = new Rect();
+        root.getBoundsInScreen(rootBounds);
+        node.getBoundsInScreen(nodeBounds);
+
+        if (rootBounds.width() <= 0 || rootBounds.height() <= 0
+                || nodeBounds.width() <= 0 || nodeBounds.height() <= 0) {
+            return false;
+        }
+
+        boolean wideEnough = nodeBounds.width() >= Math.round(rootBounds.width() * 0.25f);
+        boolean shallowEnough = nodeBounds.height() <= Math.round(rootBounds.height() * 0.18f);
+        int centerY = nodeBounds.centerY();
+        int edgeBand = Math.round(rootBounds.height() * 0.25f);
+        boolean nearTop = centerY <= rootBounds.top + edgeBand;
+        boolean nearBottom = centerY >= rootBounds.bottom - edgeBand;
+
+        return wideEnough && shallowEnough && (nearTop || nearBottom);
     }
 
     private String firstVisibleValidText(
