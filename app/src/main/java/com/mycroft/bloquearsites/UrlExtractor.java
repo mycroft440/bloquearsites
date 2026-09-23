@@ -10,9 +10,8 @@ import java.util.Locale;
 public final class UrlExtractor {
     private static final int MAX_GENERIC_NODES = 350;
     private static final int MAX_SAMSUNG_NODES = 500;
-    private static final int MAX_FIREFOX_NODES = 500;
+    private static final int MAX_FIREFOX_NODES = 800;
     private static final int MAX_SAMSUNG_SOURCE_ANCESTORS = 12;
-    private static final int MAX_FIREFOX_SOURCE_ANCESTORS = 8;
     private static final int MAX_DIAGNOSTIC_NODES = 180;
     private static final int MAX_DIAGNOSTIC_CANDIDATES = 10;
 
@@ -31,16 +30,16 @@ public final class UrlExtractor {
             "location_bar_edit"
     };
 
-    private static final String[] FIREFOX_SEMANTIC_MARKERS = {
-            "url",
-            "address",
-            "endereco",
-            "endereço",
-            "search or enter",
-            "search or type",
-            "pesquisar ou digitar",
-            "pesquisar ou inserir",
-            "barra de endereço"
+    // Toolbar em View (Fennec e Firefox anteriores ao redesign): IDs reais com prefixo do pacote.
+    private static final String[] FIREFOX_VIEW_DISPLAY_IDS = {
+            "url_bar_title",
+            "mozac_browser_toolbar_url_view"
+    };
+
+    // Toolbar em Jetpack Compose (Firefox atual): testTags expostas como resource-id, sem prefixo.
+    private static final String[] FIREFOX_COMPOSE_DISPLAY_TAGS = {
+            "ADDRESSBAR_URL_BOX",
+            "ADDRESSBAR_URL"
     };
 
     private static final String[] SAMSUNG_ID_MARKERS = {
@@ -81,7 +80,7 @@ public final class UrlExtractor {
         }
 
         if (isFirefoxClassicPackage(packageName)) {
-            return extractFirefoxClassic(root, eventSource, packageName);
+            return extractFirefoxDisplayedUrl(root, packageName);
         }
 
         if (root == null) {
@@ -100,128 +99,45 @@ public final class UrlExtractor {
         return extractGeneric(root);
     }
 
-    private String extractFirefoxClassic(
-            AccessibilityNodeInfo root,
-            AccessibilityNodeInfo eventSource,
-            String packageName
-    ) {
-        BrowserProfile profile = BrowserProfiles.forPackage(packageName);
-        if (profile == null) return null;
-
-        // A fonte do evento é a informação mais fresca durante a troca entre toolbar de exibição
-        // e de edição. Um nó com ID exato é aceito mesmo no instante em que a visibilidade muda.
-        if (eventSource != null) {
-            String fromSource = extractFirefoxFromSourceChain(
-                    eventSource,
-                    root,
-                    packageName,
-                    profile
-            );
-            if (fromSource != null) return fromSource;
-        }
-
-        if (root == null) return null;
-
-        String profiled = extractWithVisibleProfile(root, packageName, profile);
-        if (profiled != null) return profiled;
-
-        // Algumas versões/redesigns do Firefox deixam de expor viewId estável na toolbar.
-        // O fallback permanece restrito ao pacote Firefox e à geometria/semântica da barra,
-        // para não confundir URLs presentes no conteúdo da página com a URL navegada.
-        return extractFirefoxTree(root, packageName, profile);
-    }
-
-    private String extractFirefoxFromSourceChain(
-            AccessibilityNodeInfo eventSource,
-            AccessibilityNodeInfo root,
-            String packageName,
-            BrowserProfile profile
-    ) {
-        AccessibilityNodeInfo current = eventSource;
-        int expectedWindowId = root == null ? eventSource.getWindowId() : root.getWindowId();
-
-        for (int depth = 0;
-             current != null && depth < MAX_FIREFOX_SOURCE_ANCESTORS;
-             depth++) {
-
-            if (hasFirefoxPackage(current, packageName)) {
-                String direct = firstUrlLikeValue(current);
-
-                // Quando o próprio nó que gerou o evento possui um dos IDs conhecidos da barra,
-                // ele é mais confiável que isVisibleToUser() durante a animação/troca da toolbar.
-                if (direct != null && hasExactProfileId(current, packageName, profile)) {
-                    return direct;
-                }
-
-                if (isVisibleFirefoxNode(current, packageName, expectedWindowId)) {
-                    if (direct != null
-                            && (hasAddressLikeId(current)
-                            || hasFirefoxAddressSemantics(current)
-                            || isFirefoxAddressBarGeometry(current, root))) {
-                        return direct;
-                    }
-
-                    String profiled = extractWithVisibleProfile(current, packageName, profile);
-                    if (profiled != null) return profiled;
-                }
-            }
-
-            try {
-                current = current.getParent();
-            } catch (RuntimeException ignored) {
-                current = null;
-            }
-        }
-
-        return null;
-    }
-
-    private String extractWithVisibleProfile(
-            AccessibilityNodeInfo root,
-            String packageName,
-            BrowserProfile profile
-    ) {
-        if (root == null || profile == null) return null;
+    /**
+     * Lê a URL carregada na toolbar de exibição do Firefox. O campo de edição é ignorado de
+     * propósito: texto digitado e sugestões não representam a página navegada.
+     */
+    String extractFirefoxDisplayedUrl(AccessibilityNodeInfo root, String packageName) {
+        if (root == null || packageName == null) return null;
 
         int expectedWindowId = root.getWindowId();
-        for (String idName : profile.getAddressViewIds()) {
+
+        for (String idName : FIREFOX_VIEW_DISPLAY_IDS) {
             String exactId = packageName + ":id/" + idName;
             try {
                 List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(exactId);
-                String value = firstVisibleValidText(nodes, packageName, expectedWindowId);
-                if (value != null) return value;
+                if (nodes == null) continue;
+
+                for (AccessibilityNodeInfo node : nodes) {
+                    String value = firefoxDisplayValue(node, packageName, expectedWindowId);
+                    if (value != null) return value;
+                }
             } catch (RuntimeException ignored) {
-                // O Firefox pode recriar a toolbar durante navegação; os fallbacks cobrem isso.
+                // O Firefox pode recriar a toolbar durante a leitura; a próxima tentativa cobre isso.
             }
         }
-        return null;
-    }
 
-    private String extractFirefoxTree(
-            AccessibilityNodeInfo root,
-            String packageName,
-            BrowserProfile profile
-    ) {
-        if (root == null) return null;
-
+        // findAccessibilityNodeInfosByViewId só encontra Views reais, não os nós virtuais do
+        // Compose. A toolbar atual é localizada percorrendo a árvore pelo resource-id exposto.
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
-        int expectedWindowId = root.getWindowId();
 
         while (!queue.isEmpty() && visited < MAX_FIREFOX_NODES) {
             AccessibilityNodeInfo node = queue.removeFirst();
             visited++;
 
-            if (isVisibleFirefoxNode(node, packageName, expectedWindowId)) {
-                String value = firstUrlLikeValue(node);
-                if (value != null
-                        && (hasExactProfileId(node, packageName, profile)
-                        || hasAddressLikeId(node)
-                        || hasFirefoxAddressSemantics(node)
-                        || isFirefoxAddressBarGeometry(node, root))) {
-                    return value;
-                }
+            if (isFirefoxWebContent(node)) continue;
+
+            if (hasFirefoxComposeDisplayTag(node)) {
+                String value = firefoxDisplayValue(node, packageName, expectedWindowId);
+                if (value != null) return value;
             }
 
             int childCount = node.getChildCount();
@@ -234,106 +150,44 @@ public final class UrlExtractor {
         return null;
     }
 
-    private boolean hasFirefoxAddressSemantics(AccessibilityNodeInfo node) {
-        return containsFirefoxSemanticMarker(node.getContentDescription())
-                || containsFirefoxSemanticMarker(node.getHintText());
-    }
-
-    private boolean containsFirefoxSemanticMarker(CharSequence value) {
-        if (value == null || value.length() == 0) return false;
-
-        String lower = value.toString().toLowerCase(Locale.ROOT);
-        for (String marker : FIREFOX_SEMANTIC_MARKERS) {
-            if (lower.contains(marker)) return true;
-        }
-        return false;
-    }
-
-    private boolean isFirefoxAddressBarGeometry(
+    private String firefoxDisplayValue(
             AccessibilityNodeInfo node,
-            AccessibilityNodeInfo root
-    ) {
-        if (node == null || root == null || node.isPassword() || !node.isVisibleToUser()) {
-            return false;
-        }
-
-        CharSequence className = node.getClassName();
-        String classNameString = className == null ? "" : className.toString();
-        boolean addressControl = node.isEditable()
-                || node.isClickable()
-                || node.isFocusable()
-                || classNameString.endsWith("EditText")
-                || classNameString.endsWith("TextView");
-        if (!addressControl) return false;
-
-        Rect rootBounds = new Rect();
-        Rect nodeBounds = new Rect();
-        root.getBoundsInScreen(rootBounds);
-        node.getBoundsInScreen(nodeBounds);
-
-        if (rootBounds.width() <= 0 || rootBounds.height() <= 0
-                || nodeBounds.width() <= 0 || nodeBounds.height() <= 0) {
-            return false;
-        }
-
-        boolean wideEnough = nodeBounds.width() >= Math.round(rootBounds.width() * 0.30f);
-        boolean shallowEnough = nodeBounds.height() <= Math.round(rootBounds.height() * 0.14f);
-        int centerY = nodeBounds.centerY();
-        int edgeBand = Math.round(rootBounds.height() * 0.20f);
-        boolean nearTop = centerY <= rootBounds.top + edgeBand;
-        boolean nearBottom = centerY >= rootBounds.bottom - edgeBand;
-
-        return wideEnough && shallowEnough && (nearTop || nearBottom);
-    }
-
-    private String firstVisibleValidText(
-            List<AccessibilityNodeInfo> nodes,
             String packageName,
             int expectedWindowId
     ) {
-        if (nodes == null) return null;
+        if (node == null || !node.isVisibleToUser()) return null;
 
-        for (AccessibilityNodeInfo node : nodes) {
-            if (!isVisibleFirefoxNode(node, packageName, expectedWindowId)) continue;
-
-            String value = firstUrlLikeValue(node);
-            if (value != null) return value;
-        }
-        return null;
-    }
-
-    private boolean hasFirefoxPackage(AccessibilityNodeInfo node, String packageName) {
-        if (node == null || packageName == null) return false;
         CharSequence nodePackage = node.getPackageName();
-        return nodePackage != null && packageName.equals(nodePackage.toString());
-    }
-
-    private boolean isVisibleFirefoxNode(
-            AccessibilityNodeInfo node,
-            String packageName,
-            int expectedWindowId
-    ) {
-        if (node == null || !node.isVisibleToUser()) return false;
-        if (!hasFirefoxPackage(node, packageName)) return false;
+        if (nodePackage == null || !packageName.equals(nodePackage.toString())) return null;
 
         int nodeWindowId = node.getWindowId();
-        return expectedWindowId < 0 || nodeWindowId < 0 || nodeWindowId == expectedWindowId;
+        if (expectedWindowId >= 0 && nodeWindowId >= 0 && nodeWindowId != expectedWindowId) {
+            return null;
+        }
+
+        String fromText = FirefoxToolbarText.findUrl(node.getText());
+        if (fromText != null) return fromText;
+        return FirefoxToolbarText.findUrl(node.getContentDescription());
     }
 
-    private boolean hasExactProfileId(
-            AccessibilityNodeInfo node,
-            String packageName,
-            BrowserProfile profile
-    ) {
-        if (node == null || profile == null) return false;
-
+    private boolean hasFirefoxComposeDisplayTag(AccessibilityNodeInfo node) {
         String id = node.getViewIdResourceName();
         if (id == null) return false;
 
-        for (String idName : profile.getAddressViewIds()) {
-            if ((packageName + ":id/" + idName).equals(id)) return true;
+        for (String tag : FIREFOX_COMPOSE_DISPLAY_TAGS) {
+            if (id.equals(tag) || id.endsWith("/" + tag)) return true;
         }
         return false;
+    }
+
+    private boolean isFirefoxWebContent(AccessibilityNodeInfo node) {
+        CharSequence className = node.getClassName();
+        if (className == null) return false;
+
+        // O GeckoView expõe a página como "android.webkit.WebView". Links e textos do conteúdo
+        // nunca podem ser confundidos com a URL navegada.
+        String name = className.toString();
+        return "android.webkit.WebView".equals(name) || name.startsWith("org.mozilla.geckoview.");
     }
 
     private String extractSamsungSourceFirst(
@@ -541,6 +395,61 @@ public final class UrlExtractor {
             }
         }
         return null;
+    }
+
+    String describeFirefoxToolbarCandidates(AccessibilityNodeInfo root) {
+        if (root == null) return "<sem-root>";
+
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+        int candidates = 0;
+        StringBuilder summary = new StringBuilder();
+
+        while (!queue.isEmpty()
+                && visited < MAX_FIREFOX_NODES
+                && candidates < MAX_DIAGNOSTIC_CANDIDATES) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            visited++;
+
+            if (isFirefoxWebContent(node)) continue;
+
+            String id = node.getViewIdResourceName();
+            if (id != null && isFirefoxToolbarLikeId(id)) {
+                CharSequence className = node.getClassName();
+                if (summary.length() > 0) summary.append("; ");
+                summary.append("id=").append(id)
+                        .append(",class=").append(className == null ? "" : className)
+                        .append(",window=").append(node.getWindowId())
+                        .append(",visible=").append(node.isVisibleToUser())
+                        .append(",textHost=").append(hostOrDash(node.getText()))
+                        .append(",descHost=").append(hostOrDash(node.getContentDescription()));
+                candidates++;
+            }
+
+            int childCount = node.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.addLast(child);
+            }
+        }
+
+        if (summary.length() == 0) {
+            return "<nenhum-candidato-em-" + visited + "-nos>";
+        }
+        return summary.toString();
+    }
+
+    private boolean isFirefoxToolbarLikeId(String id) {
+        String lower = id.toLowerCase(Locale.ROOT);
+        return lower.contains("addressbar")
+                || lower.contains("toolbar")
+                || lower.contains("url");
+    }
+
+    private String hostOrDash(CharSequence value) {
+        String host = DomainMatcher.extractHost(FirefoxToolbarText.findUrl(value));
+        return host == null ? "-" : host;
     }
 
     String describeSamsungCandidates(AccessibilityNodeInfo root) {
