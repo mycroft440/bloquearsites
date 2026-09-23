@@ -18,6 +18,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -83,6 +84,29 @@ public final class MainActivity extends Activity {
         buttonParams.setMargins(0, dp(10), 0, dp(18));
         root.addView(accessibilityButton, buttonParams);
         accessibilityButton.setOnClickListener(v -> showAccessibilityDisclosure());
+
+        Switch adultSwitch = new Switch(this);
+        adultSwitch.setText("Bloquear pornografia");
+        adultSwitch.setTextSize(17f);
+        adultSwitch.setTextColor(Color.rgb(35, 35, 35));
+        adultSwitch.setChecked(store.isAdultFilterEnabled());
+        adultSwitch.setOnCheckedChangeListener((button, checked) -> {
+            store.setAdultFilterEnabled(checked);
+            Toast.makeText(
+                    this,
+                    checked ? "Bloqueio de pornografia ligado." : "Bloqueio de pornografia desligado.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        });
+        root.addView(adultSwitch, matchWrap());
+
+        TextView adultHint = new TextView(this);
+        adultHint.setText("Bloqueia sites pornográficos e buscas explícitas, inclusive no Google Imagens e"
+                + " Vídeos, pelo endereço e pelo texto da página. As imagens em si não são analisadas.");
+        adultHint.setTextSize(12f);
+        adultHint.setTextColor(Color.GRAY);
+        adultHint.setPadding(0, 0, 0, dp(16));
+        root.addView(adultHint, matchWrap());
 
         LinearLayout addRow = new LinearLayout(this);
         addRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -160,7 +184,7 @@ public final class MainActivity extends Activity {
         root.addView(browsersTitle, matchWrap());
 
         TextView browsersHint = new TextView(this);
-        browsersHint.setText("Só os suportados ficam liberados. Enquanto houver sites na lista, os não suportados são fechados ao abrir.");
+        browsersHint.setText("Só os suportados ficam liberados. Enquanto houver sites na lista ou o bloqueio de pornografia estiver ligado, os não suportados são fechados ao abrir.");
         browsersHint.setTextSize(12f);
         browsersHint.setTextColor(Color.GRAY);
         browsersHint.setPadding(0, 0, 0, dp(8));
@@ -255,7 +279,8 @@ public final class MainActivity extends Activity {
                         "Para bloquear os sites que você escolher, o app precisa usar o serviço de acessibilidade para ler o texto visível da barra de endereço dos navegadores e identificar o domínio aberto.\n\n"
                                 + "A URL é comparada somente no aparelho com a sua lista de bloqueio. O app não possui permissão de internet, não envia URLs, histórico ou a lista de sites a terceiros e não altera configurações sem sua ação.\n\n"
                                 + "Quando um domínio bloqueado é detectado, o app cobre a tela e leva o navegador para o Google: toca na barra de endereço, digita google.com e confirma, trocando o site da aba atual. Se não conseguir, abre o Google em uma aba nova.\n\n"
-                                + "Enquanto houver sites na lista, só os navegadores suportados ficam liberados: os demais são fechados ao abrir, voltando para a tela inicial."
+                                + "Enquanto houver sites na lista ou o bloqueio de pornografia estiver ligado, só os navegadores suportados ficam liberados: os demais são fechados ao abrir, voltando para a tela inicial.\n\n"
+                                + "Com o bloqueio de pornografia ligado, o app também lê, somente no aparelho, o texto das páginas abertas (títulos, resultados de busca e o que foi pesquisado) para identificar conteúdo adulto. Nada é enviado para fora do aparelho."
                 )
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Concordo", (dialog, which) -> openAccessibilitySettings())

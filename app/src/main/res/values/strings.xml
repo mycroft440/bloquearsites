@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">Bloquear Sites</string>
     <string name="accessibility_service_name">Bloqueador de sites</string>
-    <string name="accessibility_service_description">Lê localmente a barra de endereço do navegador para impedir a abertura dos domínios que você adicionou à lista de bloqueio. Ao detectar um deles, digita google.com na barra do navegador para trocar o site da aba. Navegadores sem suporte são fechados enquanto houver sites na lista.</string>
+    <string name="accessibility_service_description">Lê localmente a barra de endereço do navegador para impedir a abertura dos domínios que você adicionou à lista de bloqueio. Ao detectar um deles, digita google.com na barra do navegador para trocar o site da aba. Com o bloqueio de pornografia ligado, também lê localmente o texto das páginas abertas para identificar conteúdo adulto. Navegadores sem suporte são fechados enquanto houver algo a bloquear.</string>
 </resources>

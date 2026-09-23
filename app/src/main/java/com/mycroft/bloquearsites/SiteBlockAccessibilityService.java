@@ -30,9 +30,16 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     // de uma falha na mesma versão.
     private static final long ADDRESS_BAR_CHECK_MS = 5000L;
     private static final long ADDRESS_BAR_RECHECK_MS = 1500L;
+    // Filtro de pornografia: espera a página carregar antes de ler o texto dela, e só relê a
+    // mesma página depois de um intervalo (mais curto nos buscadores, onde a pesquisa muda sem
+    // mudar o domínio).
+    private static final long PAGE_SCAN_DELAY_MS = 700L;
+    private static final long SEARCH_PAGE_RESCAN_MS = 1500L;
+    private static final long PAGE_RESCAN_MS = 5000L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
+    private static final String ADULT_LOG_TAG = "BloquearSitesAdulto";
 
     private static final int LEGACY_EVENT_TYPES =
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
@@ -57,6 +64,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private String pendingUnsupportedPackage;
     private Runnable pendingAddressBarCheck;
     private String pendingAddressBarPackage;
+    private Runnable pendingPageScan;
+    private String pendingPageScanPackage;
+    private String pendingPageScanKey = "";
+    private String lastPageScanKey = "";
+    private long lastPageScanAt = 0L;
     private String lastIdentifyPackage = "";
     private long lastIdentifyAt = 0L;
     private String lastUnsupportedBrowser = "";
@@ -126,9 +138,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         Set<String> blockedSites = store.getSet();
-        if (blockedSites.isEmpty()) {
+        boolean adultFilter = store.isAdultFilterEnabled();
+        if (blockedSites.isEmpty() && !adultFilter) {
             cancelFirefoxRetry();
             cancelReread();
+            cancelPageScan();
             return;
         }
 
@@ -196,6 +210,20 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // A barra sem URL ainda pode mostrar a pesquisa (o Mi Browser mostra os termos buscados).
+        if (adultFilter && profile != null) {
+            AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(root))
+                    ? root
+                    : applicationRootForPackage(packageName);
+            String barText = urlExtractor.extractBarText(browserRoot, packageName, profile);
+            if (AdultContentFilter.isExplicitText(barText)) {
+                logAdult(packageName, "pesquisa na barra");
+                blockWithDebounce(packageName, packageName + "|barra|" + barText);
+                return;
+            }
+            requestPageScan(packageName, barText);
+        }
+
         if (rereads) {
             scheduleReread(packageName);
         }
@@ -227,18 +255,31 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             String visibleUrl,
             Set<String> blockedSites
     ) {
-        // O destino do redirecionamento fica fora da regra de bloqueio para impedir loop.
+        // O destino do redirecionamento fica fora da lista para impedir loop. Uma busca explícita no
+        // Google não é o destino (isRedirectDestination); as demais páginas do Google, como o Google
+        // Imagens, ainda têm o texto conferido pelo filtro de pornografia.
         if (redirectController != null && redirectController.isRedirectDestination(visibleUrl)) {
+            requestPageScan(packageName, visibleUrl);
             return;
         }
 
         String matchedDomain = DomainMatcher.findMatchedDomain(visibleUrl, blockedSites);
-        if (matchedDomain == null) return;
+        boolean adult = matchedDomain == null
+                && store != null
+                && store.isAdultFilterEnabled()
+                && AdultContentFilter.blocksUrl(visibleUrl);
+        if (matchedDomain == null && !adult) {
+            requestPageScan(packageName, visibleUrl);
+            return;
+        }
 
+        if (adult) logAdult(packageName, "endereço");
         String host = DomainMatcher.extractHost(visibleUrl);
-        String blockKey = packageName + "|" + host;
-        long now = SystemClock.elapsedRealtime();
+        blockWithDebounce(packageName, packageName + "|" + host);
+    }
 
+    private void blockWithDebounce(String packageName, String blockKey) {
+        long now = SystemClock.elapsedRealtime();
         if (blockKey.equals(lastBlockedKey) && now - lastBlockedAt < BLOCK_DEBOUNCE_MS) {
             return;
         }
@@ -246,6 +287,61 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         lastBlockedKey = blockKey;
         lastBlockedAt = now;
         blockCurrentPage(packageName);
+    }
+
+    /**
+     * Confere o texto da página aberta pelo filtro de pornografia (AdultContentFilter), um pouco
+     * depois do evento, com a página já carregada. A mesma página só é conferida de novo após um
+     * intervalo; nos buscadores o intervalo é curto, porque a pesquisa muda sem mudar o domínio.
+     */
+    private void requestPageScan(String packageName, String pageKey) {
+        if (store == null || !store.isAdultFilterEnabled()) return;
+
+        String key = packageName + "|" + (pageKey == null ? "" : pageKey);
+        long rescanAfter = AdultContentFilter.isSearchHost(DomainMatcher.extractHost(pageKey))
+                ? SEARCH_PAGE_RESCAN_MS
+                : PAGE_RESCAN_MS;
+        if (key.equals(lastPageScanKey)
+                && SystemClock.elapsedRealtime() - lastPageScanAt < rescanAfter) {
+            return;
+        }
+
+        pendingPageScanKey = key;
+        if (pendingPageScan != null && packageName.equals(pendingPageScanPackage)) return;
+
+        cancelPageScan();
+        pendingPageScanPackage = packageName;
+        pendingPageScan = () -> {
+            pendingPageScan = null;
+            lastPageScanKey = pendingPageScanKey;
+            lastPageScanAt = SystemClock.elapsedRealtime();
+
+            if (store == null || !store.isAdultFilterEnabled()) return;
+            if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
+                return;
+            }
+
+            AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+            if (root == null) return;
+
+            PageText page = PageText.collect(root);
+            if (!AdultContentFilter.isAdultPage(page.texts, page.fields)) return;
+
+            logAdult(packageName, "texto da página");
+            blockWithDebounce(packageName, lastPageScanKey);
+        };
+        mainHandler.postDelayed(pendingPageScan, PAGE_SCAN_DELAY_MS);
+    }
+
+    private void cancelPageScan() {
+        if (pendingPageScan == null) return;
+        mainHandler.removeCallbacks(pendingPageScan);
+        pendingPageScan = null;
+    }
+
+    private void logAdult(String packageName, String reason) {
+        if (!isDebugBuild()) return;
+        Log.d(ADULT_LOG_TAG, packageName + ": conteúdo adulto (" + reason + ")");
     }
 
     /**
@@ -273,8 +369,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             if (BrowserProfiles.forPackage(packageName) != null) return;
 
             if (store == null) store = new BlockedSitesStore(this);
+            if (!store.isBlockingActive()) return;
             Set<String> blockedSites = store.getSet();
-            if (blockedSites.isEmpty()) return;
 
             AccessibilityNodeInfo root = applicationRootForPackage(packageName);
             if (root == null || !NodeSearch.containsWebContent(root)) return;
@@ -353,7 +449,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             if (verifiedBrowsers.isVerified(packageName)) return;
 
             if (store == null) store = new BlockedSitesStore(this);
-            if (store.getSet().isEmpty()) return;
+            if (!store.isBlockingActive()) return;
             if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
                 return;
             }
@@ -440,8 +536,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
             if (root != null) {
                 if (store == null) store = new BlockedSitesStore(this);
+                if (!store.isBlockingActive()) return;
                 Set<String> blockedSites = store.getSet();
-                if (blockedSites.isEmpty()) return;
 
                 String loadedUrl = urlExtractor.extractFirefoxDisplayedUrl(root, expectedPackage);
                 String host = DomainMatcher.extractHost(loadedUrl);
@@ -534,8 +630,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             }
 
             if (store == null) store = new BlockedSitesStore(this);
+            if (!store.isBlockingActive()) return;
             Set<String> blockedSites = store.getSet();
-            if (blockedSites.isEmpty()) return;
 
             String visibleUrl = urlExtractor.extract(root, null, expectedPackage);
             logReread(expectedPackage, visibleUrl);
@@ -644,6 +740,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelReread();
         cancelUnsupportedBrowserCheck();
         cancelAddressBarCheck();
+        cancelPageScan();
     }
 
     @Override
@@ -652,6 +749,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelReread();
         cancelUnsupportedBrowserCheck();
         cancelAddressBarCheck();
+        cancelPageScan();
         if (redirectController != null) {
             redirectController.destroy();
             redirectController = null;

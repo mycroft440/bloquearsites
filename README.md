@@ -8,7 +8,7 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 2. O app normaliza e salva apenas o domínio localmente em `SharedPreferences`.
 3. Depois que o usuário consente e ativa manualmente o serviço nas Configurações de Acessibilidade do Android, o serviço observa mudanças da interface.
 4. Para navegadores conhecidos, o app usa o método da família do navegador (veja abaixo) para achar a barra de endereço.
-5. Um navegador fora da lista é testado com o método de cada família; se nenhuma se encaixa, ele é bloqueado enquanto houver sites na lista. Apps que não são navegadores passam por um fallback genérico que procura nós cujo ID se parece com barra de URL/endereço.
+5. Um navegador fora da lista é testado com o método de cada família; se nenhuma se encaixa, ele é bloqueado enquanto houver sites na lista ou o bloqueio de pornografia estiver ligado. Apps que não são navegadores passam por um fallback genérico que procura nós cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
 7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com` na própria aba: toca na barra de endereço, digita o endereço, confere o texto e confirma com o Enter de acessibilidade (Android 11+); na tela de pesquisa do Mi Browser, com a ação **Ir** do teclado de acessibilidade do serviço (Android 13+). Se a barra não puder ser usada (Android 10 ou anterior, Custom Tabs, navegador não reconhecido ou barra não encontrada), o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
 
@@ -42,7 +42,7 @@ Via (`mark.via.gp`, `mark.via`), UC Browser (`com.UCMobile.intl`, `com.UCMobile`
 
 O app identifica como navegador todo app que abre um link `https` de qualquer site (`BrowserDetector`): o teste usa um domínio inexistente, então apps que só abrem links do próprio site (YouTube, redes sociais) não entram. O bloco `<queries>` do manifesto dá essa visibilidade no Android 11+, sem a permissão de ver todos os apps.
 
-Enquanto houver sites na lista, só os navegadores suportados ficam liberados:
+Enquanto houver sites na lista ou o bloqueio de pornografia estiver ligado, só os navegadores suportados ficam liberados:
 
 - **Navegador fora da lista:** é testado com o método de cada família, sempre com uma página web na tela. A tela inicial própria de um navegador pode mostrar um endereço que as páginas não mostram. Uma leitura não basta: a mesma família precisa ler a URL da barra, sem falhar, por 2 segundos (`IdentificationConfirmation`). Assim, navegadores que mostram a URL só enquanto a página carrega e depois trocam pelo título ficam de fora.
 - **Nenhuma família se encaixa:** o navegador volta para a tela inicial (ação **Início**), com um aviso, e fica registrado como rejeitado. O primeiro bloqueio espera 2 segundos e um novo teste, para não bloquear um navegador que mostra a URL na barra depois do conteúdo. Um navegador já rejeitado é fechado assim que mostra uma página, sem esse prazo, a menos que uma família tenha acabado de ler a URL. Ele continua sendo testado a cada abertura, para o caso de uma atualização passar a funcionar.
@@ -55,6 +55,23 @@ A tela inicial do app lista os navegadores instalados: ✅ suportado (com a fam�
 Apps que não são navegadores continuam passando pelo fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…), que cobre alguns navegadores embutidos em outros apps.
 
 Os IDs vêm dos APKs de cada navegador e podem mudar em atualizações.
+
+## Bloquear pornografia
+
+A opção **Bloquear pornografia**, na tela inicial, bloqueia conteúdo adulto sem depender da lista de sites (`AdultContentFilter`). Tudo roda no aparelho: o app não tem internet, e as listas vêm dentro dele. Uma página bloqueada é trocada pelo Google, como os sites da lista.
+
+O serviço de acessibilidade só vê texto: ele não analisa o conteúdo das imagens nem dos vídeos. Por isso o filtro usa quatro sinais:
+
+1. **Domínio:** lista de sites de pornografia, webcams e plataformas adultas (com os subdomínios), domínios com trechos como `porn`, `xxx`, `xvideo` e `hentai`, palavras inteiras como `sex` e `sexo` (bloqueia `free-sex.net`, mas não `sussex.ac.uk`) e as terminações `.xxx`, `.porn`, `.sex` e `.adult`.
+2. **Endereço:** termos explícitos no caminho ou na busca, como `google.com/search?q=videos+porno` (Google Imagens e Vídeos inclusive) ou `youtube.com/results?search_query=...`. Só funciona nos navegadores que mostram o endereço completo na barra.
+3. **Pesquisa:** o texto digitado no campo de busca da página, e o que a barra mostra quando não é uma URL (o Mi Browser mostra os termos pesquisados).
+4. **Texto da página (`PageText`):** um pouco depois de a página abrir, o texto dela é conferido. A página é bloqueada se citar dois ou mais sites adultos, como a origem que o Google Imagens mostra embaixo de cada imagem, ou três ou mais termos explícitos diferentes. Nos buscadores, a conferência se repete a cada 1,5 segundo, porque a pesquisa muda sem mudar o domínio; nas demais páginas, a cada 5 segundos.
+
+Palavras comuns fora da pornografia (sexo, nude, pelada, naked) só contam dentro de expressões ("sexo explícito", "mulheres peladas"), para não bloquear "sexo biológico", "batom nude" ou "pelada de futebol".
+
+Com a opção ligada, os navegadores sem suporte também são fechados, mesmo com a lista de sites vazia.
+
+Limites: uma busca inocente que retorne imagens explícitas sem citar sites adultos nem termos explícitos não é detectada. Sites adultos com nomes comuns, fora da lista, só são pegos pelo texto da página. Para reforçar, ative o SafeSearch na conta Google.
 
 ## Segurança do matching
 

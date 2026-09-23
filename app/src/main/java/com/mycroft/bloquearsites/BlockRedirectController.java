@@ -81,8 +81,13 @@ final class BlockRedirectController {
         return redirectPackage != null && redirectPackage.equals(packageName);
     }
 
+    /**
+     * Página inicial do Google, destino do redirecionamento. Uma busca explícita no Google não conta:
+     * ela é o que o filtro de pornografia bloqueia, e a troca só termina quando ela sai da barra.
+     */
     boolean isRedirectDestination(String visibleUrl) {
-        return REDIRECT_HOST.equals(DomainMatcher.extractHost(visibleUrl));
+        return REDIRECT_HOST.equals(DomainMatcher.extractHost(visibleUrl))
+                && !AdultContentFilter.blocksUrl(visibleUrl);
     }
 
     void start(String packageName) {

@@ -85,6 +85,36 @@ public final class UrlExtractor {
         }
     }
 
+    /**
+     * Texto exibido na barra quando ele não é uma URL, como os termos pesquisados que o Mi Browser
+     * mostra nas páginas de resultado. Só para as famílias lidas por IDs.
+     */
+    String extractBarText(AccessibilityNodeInfo root, String packageName, BrowserProfile profile) {
+        if (root == null || packageName == null || profile == null) return null;
+        if (profile.getMethod() != BrowserProfile.Method.VIEW_ID
+                && profile.getMethod() != BrowserProfile.Method.VIEW_ID_WITH_REREAD) {
+            return null;
+        }
+
+        for (String idName : profile.getAddressViewIds()) {
+            try {
+                List<AccessibilityNodeInfo> nodes =
+                        root.findAccessibilityNodeInfosByViewId(packageName + ":id/" + idName);
+                if (nodes == null) continue;
+
+                for (AccessibilityNodeInfo node : nodes) {
+                    if (node == null || !NodeSearch.isVisibleInPackage(node, packageName)) continue;
+                    String text = clean(node.getText());
+                    if (text == null) text = clean(node.getContentDescription());
+                    if (text != null) return text;
+                }
+            } catch (RuntimeException ignored) {
+                // A barra pode ser recriada durante a leitura; a próxima leitura cobre isso.
+            }
+        }
+        return null;
+    }
+
     private boolean hasVisibleNodeWithId(
             AccessibilityNodeInfo root,
             String packageName,

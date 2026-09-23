@@ -12,6 +12,7 @@ import java.util.Set;
 public final class BlockedSitesStore {
     private static final String PREFS = "blocked_sites";
     private static final String KEY_DOMAINS = "domains";
+    private static final String KEY_ADULT_FILTER = "block_adult_content";
 
     private final SharedPreferences preferences;
 
@@ -38,6 +39,20 @@ public final class BlockedSitesStore {
 
     public Set<String> getSet() {
         return new HashSet<>(preferences.getStringSet(KEY_DOMAINS, Collections.emptySet()));
+    }
+
+    /** Opção "Bloquear pornografia" (AdultContentFilter). */
+    public boolean isAdultFilterEnabled() {
+        return preferences.getBoolean(KEY_ADULT_FILTER, false);
+    }
+
+    public void setAdultFilterEnabled(boolean enabled) {
+        preferences.edit().putBoolean(KEY_ADULT_FILTER, enabled).apply();
+    }
+
+    /** Se há algo a bloquear: sites na lista ou o bloqueio de pornografia ligado. */
+    public boolean isBlockingActive() {
+        return isAdultFilterEnabled() || !getSet().isEmpty();
     }
 
     public List<String> getSortedList() {
