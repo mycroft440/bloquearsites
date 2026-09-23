@@ -2,6 +2,7 @@ package com.mycroft.bloquearsites;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.accessibilityservice.InputMethod;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -11,6 +12,7 @@ import android.os.Handler;
 import android.util.Log;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.view.inputmethod.EditorInfo;
 
 import java.util.List;
 
@@ -27,9 +29,15 @@ import java.util.List;
  * do Compose (Firefox) ou a estrutura da tela (Opera GX).
  *
  * O Opera GX (família lida pela estrutura) abre uma tela de pesquisa própria para editar o
- * endereço. Só para ele, o campo é achado também como o campo editável com foco, a busca é
+ * endereço, e o Mi Browser também, no novo estilo de página (padrão nos celulares), ao tocar na
+ * barra de baixo. Só para eles, o campo é achado também como o campo editável com foco, a busca é
  * repetida enquanto a tela aparece e o texto é digitado de novo se o navegador o reescrever. Os
  * demais navegadores seguem o fluxo direto, que já funcionava.
+ *
+ * O campo da tela de pesquisa do Mi Browser só navega com a ação "Ir" do teclado (actionId 2); o
+ * Enter de acessibilidade envia o imeActionId do campo, que é 0, e é ignorado. Por isso a
+ * confirmação usa a conexão de entrada do serviço (Android 13+); sem ela, a troca pela barra nem
+ * começa e o Google abre em uma aba nova.
  */
 final class AddressBarNavigator {
     interface Callback {
@@ -60,6 +68,7 @@ final class AddressBarNavigator {
     private Runnable pendingStep;
     private boolean touchedBar;
     private boolean searchScreen;
+    private boolean editorActionSubmit;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -85,6 +94,7 @@ final class AddressBarNavigator {
         this.callback = callback;
         this.touchedBar = false;
         this.searchScreen = opensSearchScreen(browserProfile);
+        this.editorActionSubmit = false;
 
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
@@ -101,12 +111,25 @@ final class AddressBarNavigator {
             // Nos Custom Tabs do Chrome o url_bar é só leitura, e tocar nele não abre edição.
             if (BrowserProfiles.isChromium(packageName)) return false;
 
-            // Firefox, Yandex e Opera GX exibem a URL num elemento só de leitura; tocar nele abre a
-            // edição.
+            // Firefox, Yandex, Opera GX e o novo estilo do Mi Browser exibem a URL num elemento só
+            // de leitura; tocar nele abre a edição.
             AccessibilityNodeInfo display = findDisplay(root);
-            if (display == null
-                    || !(display.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tap(display))) {
-                log("barra não encontrada ou não tocada");
+            if (display == null) {
+                log("barra não encontrada");
+                return false;
+            }
+
+            if (BrowserProfiles.isAospBrowser(packageName)) {
+                if (!canSendEditorAction()) {
+                    log("ação Ir indisponível (Android 12 ou anterior)");
+                    return false;
+                }
+                searchScreen = true;
+                editorActionSubmit = true;
+            }
+
+            if (!(display.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tap(display))) {
+                log("barra não tocada");
                 return false;
             }
         }
@@ -118,6 +141,11 @@ final class AddressBarNavigator {
 
     boolean isRunning() {
         return pendingStep != null;
+    }
+
+    /** Se a troca em andamento edita o endereço numa tela de pesquisa (Opera GX e Mi Browser). */
+    boolean isUsingSearchScreen() {
+        return searchScreen;
     }
 
     void cancel() {
@@ -189,13 +217,50 @@ final class AddressBarNavigator {
             return;
         }
 
-        boolean submitted = (editField.isFocused()
-                || editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
-                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                && editField.performAction(
-                        AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
-        log("Enter=" + submitted);
+        boolean focused = editField.isFocused()
+                || editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+        boolean submitted;
+        if (editorActionSubmit) {
+            submitted = focused && sendEditorAction();
+            log("ação Ir=" + submitted);
+        } else {
+            submitted = focused
+                    && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    && editField.performAction(
+                            AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
+            log("Enter=" + submitted);
+        }
         finish(submitted);
+    }
+
+    private boolean canSendEditorAction() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && service.getInputMethod() != null;
+    }
+
+    /**
+     * Confirma como o botão de ação do teclado, pela conexão de entrada do serviço, com a ação que o
+     * campo declara. Só vale se a entrada ativa é a do navegador.
+     */
+    private boolean sendEditorAction() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+
+        InputMethod inputMethod = service.getInputMethod();
+        if (inputMethod == null || !inputMethod.getCurrentInputStarted()) return false;
+
+        EditorInfo editor = inputMethod.getCurrentInputEditorInfo();
+        if (editor == null || !packageName.equals(editor.packageName)) return false;
+
+        InputMethod.AccessibilityInputConnection connection =
+                inputMethod.getCurrentInputConnection();
+        if (connection == null) return false;
+
+        int action = editor.imeOptions & EditorInfo.IME_MASK_ACTION;
+        if (action == EditorInfo.IME_ACTION_UNSPECIFIED || action == EditorInfo.IME_ACTION_NONE) {
+            action = EditorInfo.IME_ACTION_GO;
+        }
+        connection.performEditorAction(action);
+        return true;
     }
 
     private boolean setText(AccessibilityNodeInfo editField) {
@@ -231,8 +296,9 @@ final class AddressBarNavigator {
         AccessibilityNodeInfo known = findKnownEditField(root);
         if (known != null || !touchedBar || !searchScreen) return known;
 
-        // Na tela de pesquisa do Opera GX, o campo de endereço é o campo editável com foco; em
-        // último caso, o primeiro campo editável. Os dois ficam sempre fora do conteúdo da página.
+        // Na tela de pesquisa (Opera GX e Mi Browser), o campo de endereço é o campo editável com
+        // foco; em último caso, o primeiro campo editável. Os dois ficam sempre fora do conteúdo da
+        // página.
         AccessibilityNodeInfo focused = NodeSearch.findFirst(root, node ->
                 node.isFocused()
                         && node.isEditable()
@@ -275,7 +341,18 @@ final class AddressBarNavigator {
     }
 
     private AccessibilityNodeInfo findByProfileIds(AccessibilityNodeInfo root, boolean editable) {
-        for (String idName : profile.getAddressViewIds()) {
+        AccessibilityNodeInfo address = findByIds(root, profile.getAddressViewIds(), editable);
+        if (address != null || !editable) return address;
+
+        return findByIds(root, profile.getEditFieldViewIds(), true);
+    }
+
+    private AccessibilityNodeInfo findByIds(
+            AccessibilityNodeInfo root,
+            List<String> ids,
+            boolean editable
+    ) {
+        for (String idName : ids) {
             try {
                 List<AccessibilityNodeInfo> nodes =
                         root.findAccessibilityNodeInfosByViewId(packageName + ":id/" + idName);
@@ -292,7 +369,10 @@ final class AddressBarNavigator {
         return null;
     }
 
-    /** Navegadores que editam o endereço numa tela de pesquisa própria (Opera GX). */
+    /**
+     * Famílias que sempre editam o endereço numa tela de pesquisa própria (Opera GX). O Mi Browser
+     * só a abre no novo estilo de página; isso é decidido ao tocar na barra.
+     */
     static boolean opensSearchScreen(BrowserProfile profile) {
         return profile != null && profile.getMethod() == BrowserProfile.Method.TOOLBAR_STRUCTURE;
     }

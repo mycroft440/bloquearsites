@@ -28,7 +28,7 @@ final class BlockRedirectController {
     private static final long REDIRECT_CHECK_DELAY_MS = 250L;
     private static final long SHOW_RETRY_DELAY_MS = 5000L;
     private static final long CURTAIN_MAX_VISIBLE_MS = 3000L;
-    // Opera GX: tempo para o Google aparecer depois da troca pela barra ou da aba nova.
+    // Opera GX e Mi Browser: tempo para o Google aparecer depois da troca pela barra ou da aba nova.
     private static final long REDIRECT_TIMEOUT_MS = 5000L;
 
     private final AccessibilityService service;
@@ -47,8 +47,9 @@ final class BlockRedirectController {
     private long curtainVisibleUntil = 0L;
     private long redirectDeadline = 0L;
     private boolean newTabFallbackUsed;
-    // Só o Opera GX edita o endereço numa tela de pesquisa própria; os cuidados com essa tela
-    // (fechá-la numa falha, esperar que ela feche e o limite de tempo) valem só para ele.
+    // O Opera GX e o Mi Browser no novo estilo de página editam o endereço numa tela de pesquisa
+    // própria; os cuidados com essa tela (fechá-la numa falha, esperar que ela feche e o limite de
+    // tempo) valem só para eles.
     private boolean searchScreenBrowser;
 
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
@@ -112,6 +113,8 @@ final class BlockRedirectController {
                 packageName,
                 REDIRECT_URL,
                 this::onAddressBarNavigationFinished)) {
+            // O Mi Browser só abre a tela de pesquisa no novo estilo de página, pela barra de baixo.
+            searchScreenBrowser = addressBarNavigator.isUsingSearchScreen();
             lastRedirectAt = SystemClock.elapsedRealtime();
             updateRetryButton();
             return;
@@ -143,8 +146,8 @@ final class BlockRedirectController {
     }
 
     /**
-     * Fecha a tela de pesquisa do Opera GX que a troca pela barra deixou aberta com o site
-     * bloqueado selecionado, para a aba nova não ficar escondida atrás dela.
+     * Fecha a tela de pesquisa (Opera GX e Mi Browser) que a troca pela barra deixou aberta com o
+     * site bloqueado, para a aba nova não ficar escondida atrás dela.
      */
     private void closeAddressEditor() {
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
@@ -165,7 +168,7 @@ final class BlockRedirectController {
             redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
         } else {
             // Se a barra não pôde ser usada, cai no comportamento antigo: Google em uma aba nova.
-            // No Opera GX, antes fecha a tela de pesquisa que ficou aberta.
+            // Com uma tela de pesquisa (Opera GX e Mi Browser), antes fecha a que ficou aberta.
             if (touchedBar && searchScreenBrowser) closeAddressEditor();
             lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
             openGoogleInNewTab();
@@ -210,8 +213,8 @@ final class BlockRedirectController {
         boolean browserInFront = redirectPackage.equals(packageName);
 
         if (browserInFront) {
-            // No Opera GX, com a tela de pesquisa ainda aberta, google.com é só o texto digitado: a
-            // chegada só conta com ela fechada.
+            // Com a tela de pesquisa ainda aberta (Opera GX e Mi Browser), google.com é só o texto
+            // digitado: a chegada só conta com ela fechada.
             String visibleUrl = urlExtractor.extract(root, null, packageName);
             if (isRedirectDestination(visibleUrl)
                     && !(searchScreenBrowser && isEditingAddress(root, packageName))) {

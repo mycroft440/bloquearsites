@@ -3,6 +3,7 @@ package com.mycroft.bloquearsites;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.pm.ApplicationInfo;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -68,6 +69,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                     | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
                     | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // A tela de pesquisa do Mi Browser só navega com a ação "Ir" do teclado, enviada
+                // pela conexão de entrada do serviço (AddressBarNavigator).
+                info.flags |= AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR;
+            }
             setServiceInfo(info);
         }
     }

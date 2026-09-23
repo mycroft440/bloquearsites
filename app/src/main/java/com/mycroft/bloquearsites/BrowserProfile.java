@@ -42,6 +42,7 @@ public final class BrowserProfile {
     private final Method method;
     private final Set<String> packageNames;
     private final List<String> addressViewIds;
+    private final List<String> editFieldViewIds;
 
     public BrowserProfile(
             String family,
@@ -49,10 +50,43 @@ public final class BrowserProfile {
             String[] packageNames,
             String... addressViewIds
     ) {
+        this(
+                family,
+                method,
+                Collections.unmodifiableSet(new HashSet<>(Arrays.asList(packageNames))),
+                Collections.unmodifiableList(Arrays.asList(addressViewIds)),
+                Collections.emptyList()
+        );
+    }
+
+    private BrowserProfile(
+            String family,
+            Method method,
+            Set<String> packageNames,
+            List<String> addressViewIds,
+            List<String> editFieldViewIds
+    ) {
         this.family = family;
         this.method = method;
-        this.packageNames = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(packageNames)));
-        this.addressViewIds = Collections.unmodifiableList(Arrays.asList(addressViewIds));
+        this.packageNames = packageNames;
+        this.addressViewIds = addressViewIds;
+        this.editFieldViewIds = editFieldViewIds;
+    }
+
+    /**
+     * Cópia da família com campos de edição que só existem depois de tocar na barra, numa tela de
+     * pesquisa separada. Eles servem para digitar o destino, nunca para ler a URL: o texto digitado
+     * não é a página aberta, e um ID genérico faria navegadores desconhecidos se encaixarem na
+     * família.
+     */
+    BrowserProfile withEditFieldViewIds(String... ids) {
+        return new BrowserProfile(
+                family,
+                method,
+                packageNames,
+                addressViewIds,
+                Collections.unmodifiableList(Arrays.asList(ids))
+        );
     }
 
     public boolean matchesPackage(String packageName) {
@@ -73,6 +107,10 @@ public final class BrowserProfile {
 
     public List<String> getAddressViewIds() {
         return addressViewIds;
+    }
+
+    public List<String> getEditFieldViewIds() {
+        return editFieldViewIds;
     }
 
     /** Ouve todos os tipos de evento e relê a barra se a primeira leitura falhar. */

@@ -85,8 +85,12 @@ public final class BrowserProfiles {
             "compact_url_text"
     );
 
-    // Mi Browser e navegadores da base AOSP (com.android.browser, usado pela MIUI): UrlInputView
-    // com ID url, que mostra a URL sem o esquema e vira o campo de edição ao ser tocado.
+    // Mi Browser e navegadores da base AOSP (com.android.browser, usado pela MIUI). A barra antiga
+    // (tablets e versões anteriores) é o UrlInputView com ID url, que mostra a URL sem o esquema e
+    // vira o campo de edição ao ser tocado. No novo estilo de página, padrão nos celulares desde o
+    // Mi Browser 14 (analisado no APK 14.64), o domínio fica na barra de baixo (ou de cima, se o
+    // usuário mudar): texto em web_bottom_url e descrição em web_bottom_url_click, a área de toque.
+    // Tocar nela abre a tela de pesquisa, com o campo et_input.
     private static final BrowserProfile AOSP_BROWSER = new BrowserProfile(
             "Mi Browser/AOSP",
             Method.VIEW_ID_WITH_REREAD,
@@ -94,8 +98,10 @@ public final class BrowserProfiles {
                     "com.mi.globalbrowser",
                     "com.android.browser"
             },
-            "url"
-    );
+            "url",
+            "web_bottom_url_click",
+            "web_bottom_url"
+    ).withEditFieldViewIds("et_input");
 
     private static final BrowserProfile OPERA = new BrowserProfile(
             "Opera",
@@ -187,6 +193,10 @@ public final class BrowserProfiles {
 
     public static boolean isFirefox(String packageName) {
         return forPackage(packageName) == FIREFOX;
+    }
+
+    public static boolean isAospBrowser(String packageName) {
+        return forPackage(packageName) == AOSP_BROWSER;
     }
 
     public static boolean isKnownUnsupported(String packageName) {

@@ -63,8 +63,30 @@ public class BrowserProfilesTest {
         BrowserProfile mi = BrowserProfiles.forPackage("com.mi.globalbrowser");
 
         assertEquals(Method.VIEW_ID_WITH_REREAD, mi.getMethod());
-        assertEquals(Collections.singletonList("url"), mi.getAddressViewIds());
+        assertEquals("url", mi.getAddressViewIds().get(0));
         assertSame(mi, BrowserProfiles.forPackage("com.android.browser"));
+        assertTrue(BrowserProfiles.isAospBrowser("com.android.browser"));
+        assertFalse(BrowserProfiles.isAospBrowser("com.android.chrome"));
+    }
+
+    @Test
+    public void miBrowserReadsTheNewWebpageStyleBar() {
+        BrowserProfile mi = BrowserProfiles.forPackage("com.mi.globalbrowser");
+
+        assertTrue(mi.getAddressViewIds().contains("web_bottom_url_click"));
+        assertTrue(mi.getAddressViewIds().contains("web_bottom_url"));
+        // O campo da tela de pesquisa só serve para digitar: não conta como URL exibida nem
+        // identifica navegadores desconhecidos.
+        assertEquals(Collections.singletonList("et_input"), mi.getEditFieldViewIds());
+        assertFalse(mi.getAddressViewIds().contains("et_input"));
+    }
+
+    @Test
+    public void onlyTheMiFamilyHasSeparateEditFields() {
+        for (BrowserProfile profile : BrowserProfiles.all()) {
+            if (profile == BrowserProfiles.forPackage("com.mi.globalbrowser")) continue;
+            assertTrue(profile.getFamily(), profile.getEditFieldViewIds().isEmpty());
+        }
     }
 
     @Test

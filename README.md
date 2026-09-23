@@ -10,7 +10,7 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 4. Para navegadores conhecidos, o app usa o método da família do navegador (veja abaixo) para achar a barra de endereço.
 5. Um navegador fora da lista é testado com o método de cada família; se nenhuma se encaixa, ele é bloqueado enquanto houver sites na lista. Apps que não são navegadores passam por um fallback genérico que procura nós cujo ID se parece com barra de URL/endereço.
 6. A URL visível é normalizada para host e comparada com a lista. `example.com` também bloqueia `www.example.com` e `sub.example.com`, mas não bloqueia `evil-example.com`.
-7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com` na própria aba: toca na barra de endereço, digita o endereço, confere o texto e confirma com o Enter de acessibilidade (Android 11+). Se a barra não puder ser usada (Android 10 ou anterior, Custom Tabs, navegador não reconhecido ou barra não encontrada), o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
+7. Ao detectar um domínio bloqueado, o serviço cobre a tela por alguns instantes e leva o navegador para `google.com` na própria aba: toca na barra de endereço, digita o endereço, confere o texto e confirma com o Enter de acessibilidade (Android 11+); na tela de pesquisa do Mi Browser, com a ação **Ir** do teclado de acessibilidade do serviço (Android 13+). Se a barra não puder ser usada (Android 10 ou anterior, Custom Tabs, navegador não reconhecido ou barra não encontrada), o Google é aberto em uma aba nova (no Firefox, depois da ação **Voltar**).
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 
@@ -23,13 +23,14 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 | Chromium | Chrome (estável/Beta/Dev/Canary), Brave, Edge, Vivaldi, Kiwi, Chromium, Cromite, Bromite, Mulch | `VIEW_ID` | `url_bar` (EditText) |
 | Firefox | Firefox, Firefox Beta, Nightly, Tor Browser, Fennec F-Droid, Iceraven, Mull | `FIREFOX_TOOLBAR` | barra em Jetpack Compose (`ADDRESSBAR_URL_BOX`, URL lida da descrição de acessibilidade) ou barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`); só a URL exibida conta, confirmada por leituras estáveis |
 | Samsung Internet | Samsung Internet e Beta | `VIEW_ID_WITH_REREAD` | `location_bar_edit_text` (UrlBar) e `compact_url_text` (barra compacta ao rolar); o domínio vem precedido da marca invisível U+200E |
-| Mi Browser/AOSP | Mi Browser (`com.mi.globalbrowser`) e navegadores da base AOSP (`com.android.browser`, usado pela MIUI) | `VIEW_ID_WITH_REREAD` | `url` (UrlInputView), com a URL sem o esquema |
+| Mi Browser/AOSP | Mi Browser (`com.mi.globalbrowser`) e navegadores da base AOSP (`com.android.browser`, usado pela MIUI) | `VIEW_ID_WITH_REREAD` | no novo estilo de página (padrão nos celulares desde o Mi Browser 14), o domínio na barra de baixo (`web_bottom_url` e a descrição de `web_bottom_url_click`); na barra antiga (tablets), `url` (UrlInputView), com a URL sem o esquema. Tocar na barra de baixo abre a tela de pesquisa (`et_input`), usada só para digitar o destino |
 | Opera | Opera, Opera Beta, Opera Mini | `VIEW_ID` | `url_field` |
 | DuckDuckGo | DuckDuckGo | `VIEW_ID` | `omnibarTextInput` |
 | Yandex | Yandex e Yandex Beta | `VIEW_ID` | domínio no título central (`bro_omnibar_address_title_text`/`_view`, `bro_omnibox_collapsed_title` recolhida); edição em `suggest_omnibox_query_edit` |
 | Barra na tela | Opera GX (barra em Compose, sem IDs) | `TOOLBAR_STRUCTURE` | texto com URL ou domínio junto à borda; em seguida, ID com cara de barra de endereço, sempre fora da página |
 
 - `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
+- A tela de pesquisa do Mi Browser só navega com a ação **Ir** do teclado; o Enter de acessibilidade chega com outra ação e é ignorado. Por isso o serviço declara `flagInputMethodEditor` e envia a ação pela própria conexão de entrada (Android 13+), sem ler o que é digitado. No Android 12 ou anterior, o Google abre em uma aba nova no Mi Browser.
 - Os pacotes das famílias acima formam a lista de navegadores suportados.
 - **Navegadores fora da lista** são testados com o método de cada família (`IdentifiedBrowsers`, na ordem Chromium, Firefox, Samsung Internet, Mi Browser/AOSP, Opera, DuckDuckGo e Yandex). A primeira família cujo método lê a URL da barra passa a ser a família do navegador, e o resultado fica salvo. Um derivado do Chrome, por exemplo, se encaixa pelo `url_bar`. A Barra na tela não aceita navegadores desconhecidos: ela depende de a barra mostrar a URL, e navegadores que mostram o título da página deixariam passar sites abertos por links.
 
