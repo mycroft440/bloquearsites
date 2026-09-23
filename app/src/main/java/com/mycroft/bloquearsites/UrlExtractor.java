@@ -108,9 +108,15 @@ public final class UrlExtractor {
         BrowserProfile profile = BrowserProfiles.forPackage(packageName);
         if (profile == null) return null;
 
-        // Primeiro tentamos os IDs conhecidos, tanto do Fennec quanto do Firefox moderno.
+        // A fonte do evento é a informação mais fresca durante a troca entre toolbar de exibição
+        // e de edição. Um nó com ID exato é aceito mesmo no instante em que a visibilidade muda.
         if (eventSource != null) {
-            String fromSource = extractFirefoxFromSourceChain(eventSource, packageName, profile);
+            String fromSource = extractFirefoxFromSourceChain(
+                    eventSource,
+                    root,
+                    packageName,
+                    profile
+            );
             if (fromSource != null) return fromSource;
         }
 
@@ -127,23 +133,37 @@ public final class UrlExtractor {
 
     private String extractFirefoxFromSourceChain(
             AccessibilityNodeInfo eventSource,
+            AccessibilityNodeInfo root,
             String packageName,
             BrowserProfile profile
     ) {
         AccessibilityNodeInfo current = eventSource;
+        int expectedWindowId = root == null ? eventSource.getWindowId() : root.getWindowId();
 
         for (int depth = 0;
              current != null && depth < MAX_FIREFOX_SOURCE_ANCESTORS;
              depth++) {
 
-            if (isVisibleFirefoxNode(current, packageName, current.getWindowId())) {
-                if (hasExactProfileId(current, packageName, profile)) {
-                    String direct = firstUrlLikeValue(current);
-                    if (direct != null) return direct;
+            if (hasFirefoxPackage(current, packageName)) {
+                String direct = firstUrlLikeValue(current);
+
+                // Quando o próprio nó que gerou o evento possui um dos IDs conhecidos da barra,
+                // ele é mais confiável que isVisibleToUser() durante a animação/troca da toolbar.
+                if (direct != null && hasExactProfileId(current, packageName, profile)) {
+                    return direct;
                 }
 
-                String profiled = extractWithVisibleProfile(current, packageName, profile);
-                if (profiled != null) return profiled;
+                if (isVisibleFirefoxNode(current, packageName, expectedWindowId)) {
+                    if (direct != null
+                            && (hasAddressLikeId(current)
+                            || hasFirefoxAddressSemantics(current)
+                            || isFirefoxAddressBarGeometry(current, root))) {
+                        return direct;
+                    }
+
+                    String profiled = extractWithVisibleProfile(current, packageName, profile);
+                    if (profiled != null) return profiled;
+                }
             }
 
             try {
@@ -240,6 +260,8 @@ public final class UrlExtractor {
         CharSequence className = node.getClassName();
         String classNameString = className == null ? "" : className.toString();
         boolean addressControl = node.isEditable()
+                || node.isClickable()
+                || node.isFocusable()
                 || classNameString.endsWith("EditText")
                 || classNameString.endsWith("TextView");
         if (!addressControl) return false;
@@ -254,10 +276,10 @@ public final class UrlExtractor {
             return false;
         }
 
-        boolean wideEnough = nodeBounds.width() >= Math.round(rootBounds.width() * 0.25f);
-        boolean shallowEnough = nodeBounds.height() <= Math.round(rootBounds.height() * 0.18f);
+        boolean wideEnough = nodeBounds.width() >= Math.round(rootBounds.width() * 0.30f);
+        boolean shallowEnough = nodeBounds.height() <= Math.round(rootBounds.height() * 0.14f);
         int centerY = nodeBounds.centerY();
-        int edgeBand = Math.round(rootBounds.height() * 0.25f);
+        int edgeBand = Math.round(rootBounds.height() * 0.20f);
         boolean nearTop = centerY <= rootBounds.top + edgeBand;
         boolean nearBottom = centerY >= rootBounds.bottom - edgeBand;
 
@@ -280,15 +302,19 @@ public final class UrlExtractor {
         return null;
     }
 
+    private boolean hasFirefoxPackage(AccessibilityNodeInfo node, String packageName) {
+        if (node == null || packageName == null) return false;
+        CharSequence nodePackage = node.getPackageName();
+        return nodePackage != null && packageName.equals(nodePackage.toString());
+    }
+
     private boolean isVisibleFirefoxNode(
             AccessibilityNodeInfo node,
             String packageName,
             int expectedWindowId
     ) {
         if (node == null || !node.isVisibleToUser()) return false;
-
-        CharSequence nodePackage = node.getPackageName();
-        if (nodePackage == null || !packageName.equals(nodePackage.toString())) return false;
+        if (!hasFirefoxPackage(node, packageName)) return false;
 
         int nodeWindowId = node.getWindowId();
         return expectedWindowId < 0 || nodeWindowId < 0 || nodeWindowId == expectedWindowId;
