@@ -31,6 +31,29 @@ final class NodeSearch {
                 && nodePackage.toString().equals(packageName);
     }
 
+    /** Indica se a janela está mostrando uma página web (WebView ou GeckoView). */
+    static boolean containsWebContent(AccessibilityNodeInfo root) {
+        if (root == null) return false;
+
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+
+        while (!queue.isEmpty() && visited < MAX_NODES) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            visited++;
+
+            if (isWebContent(node)) return true;
+
+            int childCount = node.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.addLast(child);
+            }
+        }
+        return false;
+    }
+
     /** Busca em largura que não entra no conteúdo da página. */
     static AccessibilityNodeInfo findFirst(
             AccessibilityNodeInfo root,

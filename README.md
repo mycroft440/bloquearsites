@@ -32,7 +32,15 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 - `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
 - **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, nas configurações do Via mude **Conteúdo da caixa de URL** (em inglês, *URL field content*) de **Título** para **URL** ou **Domínio**. Com o título, só endereços digitados na barra são bloqueados.
 - **UC Browser:** endereços digitados na barra são bloqueados. Páginas abertas por links só são reconhecidas se a barra do UC mostrar a URL ou o domínio; se ela mostrar o título da página, não há URL a ler.
-- Navegadores não reconhecidos usam um fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…).
+- Os pacotes das famílias acima formam a lista de navegadores suportados.
+
+## Navegadores sem suporte
+
+O app identifica como navegador todo app que abre um link `https` de qualquer site (`BrowserDetector`): o teste usa um domínio inexistente, então apps que só abrem links do próprio site (YouTube, redes sociais) não entram. O bloco `<queries>` do manifesto dá essa visibilidade no Android 11+, sem a permissão de ver todos os apps.
+
+Enquanto houver sites na lista, um navegador que não pertence a nenhuma família é fechado (ação **Início**, com um aviso) assim que mostra uma página web. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
+
+Apps que não são navegadores continuam passando pelo fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…), que cobre alguns navegadores embutidos em outros apps.
 
 Os IDs vêm dos APKs de cada navegador e podem mudar em atualizações.
 

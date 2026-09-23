@@ -86,6 +86,14 @@ public class BrowserProfilesTest {
     }
 
     @Test
+    public void onlyFamiliesWithLimitationsCarryANote() {
+        assertNull(BrowserProfiles.forPackage("com.android.chrome").getNote());
+        assertNull(BrowserProfiles.forPackage("org.mozilla.firefox").getNote());
+        assertTrue(BrowserProfiles.forPackage("mark.via.gp").getNote().contains("URL"));
+        assertTrue(BrowserProfiles.forPackage("com.UCMobile.intl").getNote().startsWith("parcial"));
+    }
+
+    @Test
     public void everyPackageBelongsToASingleFamily() {
         Set<String> seen = new HashSet<>();
         for (BrowserProfile profile : BrowserProfiles.all()) {

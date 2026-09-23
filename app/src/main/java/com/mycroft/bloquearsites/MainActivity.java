@@ -22,6 +22,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public final class MainActivity extends Activity {
@@ -31,6 +32,7 @@ public final class MainActivity extends Activity {
 
     private TextView statusView;
     private TextView emptyView;
+    private TextView browsersView;
     private EditText siteInput;
 
     @Override
@@ -46,6 +48,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         updateAccessibilityStatus();
         refreshSites();
+        refreshBrowsers();
     }
 
     private View buildContentView() {
@@ -149,6 +152,19 @@ public final class MainActivity extends Activity {
                     .show();
         });
 
+        TextView browsersTitle = new TextView(this);
+        browsersTitle.setText("Navegadores encontrados");
+        browsersTitle.setTextSize(18f);
+        browsersTitle.setTextColor(Color.rgb(35, 35, 35));
+        browsersTitle.setPadding(0, dp(18), 0, dp(6));
+        root.addView(browsersTitle, matchWrap());
+
+        browsersView = new TextView(this);
+        browsersView.setTextSize(14f);
+        browsersView.setTextColor(Color.DKGRAY);
+        browsersView.setLineSpacing(0f, 1.15f);
+        root.addView(browsersView, matchWrap());
+
         TextView footer = new TextView(this);
         footer.setText("O app não usa permissão de internet. A leitura da barra de endereço acontece localmente no aparelho.");
         footer.setTextSize(12f);
@@ -181,13 +197,38 @@ public final class MainActivity extends Activity {
         emptyView.setVisibility(domains.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
+    private void refreshBrowsers() {
+        if (browsersView == null) return;
+
+        BrowserDetector detector = new BrowserDetector(this);
+        List<String> lines = new ArrayList<>();
+        for (String packageName : detector.installedBrowsers()) {
+            BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+            String status;
+            if (profile == null) {
+                status = "sem suporte: fechado enquanto houver sites bloqueados";
+            } else if (profile.getNote() != null) {
+                status = "compatível (" + profile.getNote() + ")";
+            } else {
+                status = "compatível";
+            }
+            lines.add("\u2022 " + detector.labelOf(packageName) + " \u2014 " + status);
+        }
+        Collections.sort(lines, String.CASE_INSENSITIVE_ORDER);
+
+        browsersView.setText(lines.isEmpty()
+                ? "Nenhum navegador encontrado."
+                : TextUtils.join("\n", lines));
+    }
+
     private void showAccessibilityDisclosure() {
         new AlertDialog.Builder(this)
                 .setTitle("Uso do serviço de acessibilidade")
                 .setMessage(
                         "Para bloquear os sites que você escolher, o app precisa usar o serviço de acessibilidade para ler o texto visível da barra de endereço dos navegadores e identificar o domínio aberto.\n\n"
                                 + "A URL é comparada somente no aparelho com a sua lista de bloqueio. O app não possui permissão de internet, não envia URLs, histórico ou a lista de sites a terceiros e não altera configurações sem sua ação.\n\n"
-                                + "Quando um domínio bloqueado é detectado, o app cobre a tela e leva o navegador para o Google: toca na barra de endereço, digita google.com e confirma, trocando o site da aba atual. Se não conseguir, abre o Google em uma aba nova."
+                                + "Quando um domínio bloqueado é detectado, o app cobre a tela e leva o navegador para o Google: toca na barra de endereço, digita google.com e confirma, trocando o site da aba atual. Se não conseguir, abre o Google em uma aba nova.\n\n"
+                                + "Enquanto houver sites na lista, navegadores sem suporte são fechados ao abrir uma página, voltando para a tela inicial."
                 )
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Concordo", (dialog, which) -> openAccessibilitySettings())

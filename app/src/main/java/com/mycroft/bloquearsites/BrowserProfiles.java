@@ -107,7 +107,7 @@ public final class BrowserProfiles {
                     "mark.via.gp",
                     "mark.via"
             }
-    );
+    ).withNote("no Via, mude \u201cConteúdo da caixa de URL\u201d para URL ou Domínio");
 
     // UC Browser: a barra exibida é montada por código ofuscado. A edição de endereço
     // (SmartURLWindow) é um campo no topo; a barra exibida só identifica o site se mostrar a URL ou
@@ -119,7 +119,7 @@ public final class BrowserProfiles {
                     "com.UCMobile.intl",
                     "com.UCMobile"
             }
-    );
+    ).withNote("parcial: bloqueia endereços digitados; links só se a barra mostrar a URL");
 
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,

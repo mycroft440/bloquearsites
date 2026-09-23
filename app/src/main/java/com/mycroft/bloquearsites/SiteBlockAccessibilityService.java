@@ -7,6 +7,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.widget.Toast;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -19,6 +20,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final int FIREFOX_RETRY_ATTEMPTS = 16;
     private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
     private static final long REREAD_DELAY_MS = 250L;
+    private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -31,6 +33,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                     | AccessibilityEvent.TYPE_VIEW_CLICKED;
 
     private final UrlExtractor urlExtractor = new UrlExtractor();
+    private BrowserDetector browserDetector;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private BlockedSitesStore store;
@@ -40,11 +43,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private Runnable pendingFirefoxRetry;
     private String pendingFirefoxPackage;
     private Runnable pendingReread;
+    private String lastUnsupportedBrowser = "";
+    private long lastUnsupportedBrowserAt = 0L;
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         store = new BlockedSitesStore(this);
+        browserDetector = new BrowserDetector(this);
         redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
 
         AccessibilityServiceInfo info = getServiceInfo();
@@ -100,6 +106,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         if (blockedSites.isEmpty()) {
             cancelFirefoxRetry();
             cancelReread();
+            return;
+        }
+
+        // Navegadores fora das famílias suportadas não têm a barra lida; enquanto houver sites
+        // bloqueados, eles são fechados para não servirem de desvio.
+        if (browserDetector == null) browserDetector = new BrowserDetector(this);
+        if (profile == null && browserDetector.isUnsupportedBrowser(packageName)) {
+            closeUnsupportedBrowser(packageName, root);
             return;
         }
 
@@ -175,6 +189,32 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         lastBlockedKey = blockKey;
         lastBlockedAt = now;
         blockCurrentPage(packageName);
+    }
+
+    private void closeUnsupportedBrowser(String packageName, AccessibilityNodeInfo activeRoot) {
+        AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(activeRoot))
+                ? activeRoot
+                : applicationRootForPackage(packageName);
+
+        // Sem página web na tela o app ainda não está navegando, ou não é de fato um navegador
+        // (gerenciadores de download também abrem links).
+        if (!NodeSearch.containsWebContent(browserRoot)) return;
+
+        long now = SystemClock.elapsedRealtime();
+        if (packageName.equals(lastUnsupportedBrowser)
+                && now - lastUnsupportedBrowserAt < UNSUPPORTED_BROWSER_DEBOUNCE_MS) {
+            return;
+        }
+        lastUnsupportedBrowser = packageName;
+        lastUnsupportedBrowserAt = now;
+
+        performGlobalAction(GLOBAL_ACTION_HOME);
+        Toast.makeText(
+                this,
+                browserDetector.labelOf(packageName)
+                        + " não é compatível com o Bloquear Sites e foi fechado.",
+                Toast.LENGTH_LONG
+        ).show();
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
