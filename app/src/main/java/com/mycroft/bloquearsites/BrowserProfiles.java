@@ -99,7 +99,7 @@ public final class BrowserProfiles {
     );
 
     // Via: IDs ofuscados que mudam a cada versão. Por padrão a barra mostra o título da página;
-    // a URL só fica visível com "Conteúdo do campo de URL" em URL ou Domínio.
+    // a URL só fica visível com "Conteúdo da caixa de URL" em URL ou Domínio.
     private static final BrowserProfile VIA = new BrowserProfile(
             "Via",
             Method.TOOLBAR_STRUCTURE,
