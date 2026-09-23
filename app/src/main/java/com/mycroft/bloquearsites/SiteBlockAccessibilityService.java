@@ -17,13 +17,14 @@ import java.util.Set;
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
     private static final long FIREFOX_RETRY_DELAY_MS = 220L;
-    private static final int FIREFOX_RETRY_ATTEMPTS = 10;
+    private static final int FIREFOX_RETRY_ATTEMPTS = 16;
+    private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
     private static final long SAMSUNG_RETRY_DELAY_MS = 250L;
 
     private static final String FIREFOX_CLASSIC_PACKAGE = "org.mozilla.firefox";
-    private static final String[] FIREFOX_EDIT_VIEW_IDS = {
-            "url_edit_text",
-            "mozac_browser_toolbar_edit_url_view"
+    private static final String[] FIREFOX_DISPLAY_VIEW_IDS = {
+            "url_bar_title",
+            "mozac_browser_toolbar_url_view"
     };
     private static final String SAMSUNG_PACKAGE = "com.sec.android.app.sbrowser";
     private static final String SAMSUNG_BETA_PACKAGE = "com.sec.android.app.sbrowser.beta";
@@ -105,37 +106,20 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
-        AccessibilityNodeInfo extractionRoot = root;
         if (firefoxClassic) {
-            // getRootInActiveWindow() pode apontar para uma janela auxiliar/IME. Como o serviço
-            // já recupera janelas interativas, procuramos explicitamente a janela do Firefox.
-            AccessibilityNodeInfo firefoxRoot = applicationRootForPackage(packageName);
-            if (firefoxRoot != null) extractionRoot = firefoxRoot;
+            // Texto digitado e sugestões nunca contam como URL navegada. Todo evento do Firefox
+            // apenas inicia uma confirmação curta da URL exibida pela toolbar da janela ativa.
+            scheduleFirefoxRetry(packageName);
+            return;
+        }
 
-            // Enquanto a barra está em modo de edição, sugestões e autocompletar podem conter
-            // domínios bloqueados que ainda não foram navegados. Nesse estado nunca bloqueamos
-            // pelo texto visível; apenas aguardamos a barra voltar ao modo de exibição.
-            if (isFirefoxAddressEditing(extractionRoot, source, packageName)) {
-                scheduleFirefoxRetry(packageName);
-                return;
-            }
-        } else if (samsung && !sameWindow(event, root)) {
+        AccessibilityNodeInfo extractionRoot = root;
+        if (samsung && !sameWindow(event, root)) {
             // Se o evento e a raiz apontam para janelas diferentes, a fonte do evento é mais confiável.
             extractionRoot = null;
         }
 
         String visibleUrl = urlExtractor.extract(extractionRoot, source, packageName);
-
-        if (firefoxClassic) {
-            // Mesmo quando a primeira leitura ainda mostra a página anterior (por exemplo google.com),
-            // mantemos uma confirmação curta. O Firefox pode atualizar a URL carregada depois do
-            // evento que iniciou a navegação e sem emitir outro evento útil para o serviço.
-            scheduleFirefoxRetry(packageName);
-            if (visibleUrl != null) {
-                handleVisibleUrl(packageName, visibleUrl, blockedSites);
-            }
-            return;
-        }
 
         if (samsung) {
             logSamsungEvent(event, source, root, visibleUrl);
@@ -203,67 +187,84 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
-        // Eventos sucessivos não reiniciam o relógio. A sequência cobre tanto a saída do modo de
-        // edição quanto a atualização tardia da URL depois de um clique ou submissão da barra.
+        // Eventos sucessivos não reiniciam a sequência. A URL precisa aparecer estável na toolbar
+        // de exibição antes de ser considerada realmente carregada.
         if (pendingFirefoxRetry != null) return;
-        scheduleFirefoxRetryAttempt(expectedPackage, FIREFOX_RETRY_ATTEMPTS);
+        scheduleFirefoxRetryAttempt(
+                expectedPackage,
+                FIREFOX_RETRY_ATTEMPTS,
+                null,
+                0
+        );
     }
 
-    private void scheduleFirefoxRetryAttempt(String expectedPackage, int attemptsRemaining) {
+    private void scheduleFirefoxRetryAttempt(
+            String expectedPackage,
+            int attemptsRemaining,
+            String previousHost,
+            int stableReads
+    ) {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
 
+            String nextHost = previousHost;
+            int nextStableReads = stableReads;
+
             AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
             if (root != null) {
-                // Enquanto a barra continua editável, não analisamos sugestões/autocomplete.
-                if (!isFirefoxAddressEditing(root, null, expectedPackage)) {
-                    if (store == null) store = new BlockedSitesStore(this);
-                    Set<String> blockedSites = store.getSet();
-                    if (blockedSites.isEmpty()) return;
+                if (store == null) store = new BlockedSitesStore(this);
+                Set<String> blockedSites = store.getSet();
+                if (blockedSites.isEmpty()) return;
 
-                    String visibleUrl = urlExtractor.extract(root, null, expectedPackage);
-                    if (visibleUrl != null) {
-                        handleVisibleUrl(expectedPackage, visibleUrl, blockedSites);
+                String loadedUrl = extractFirefoxDisplayedUrl(root, expectedPackage);
+                String host = DomainMatcher.extractHost(loadedUrl);
 
-                        // Se houve bloqueio, blockCurrentPage() inicia o controlador e cancela
-                        // qualquer retry. Não criamos uma nova tentativa nesse estado.
-                        if (redirectController != null
-                                && redirectController.shouldIgnorePackage(expectedPackage)) {
-                            return;
-                        }
+                if (host == null) {
+                    nextHost = null;
+                    nextStableReads = 0;
+                } else if (host.equals(previousHost)) {
+                    nextHost = host;
+                    nextStableReads = stableReads + 1;
+                } else {
+                    nextHost = host;
+                    nextStableReads = 1;
+                }
+
+                if (loadedUrl != null
+                        && nextStableReads >= FIREFOX_STABLE_READS_REQUIRED) {
+                    handleVisibleUrl(expectedPackage, loadedUrl, blockedSites);
+
+                    if (redirectController != null
+                            && redirectController.shouldIgnorePackage(expectedPackage)) {
+                        return;
                     }
                 }
+            } else {
+                nextHost = null;
+                nextStableReads = 0;
             }
 
-            // Uma URL permitida não encerra a confirmação: ela pode ser apenas a página anterior
-            // observada enquanto o Firefox ainda está concluindo a navegação para a nova URL.
             if (attemptsRemaining > 1) {
-                scheduleFirefoxRetryAttempt(expectedPackage, attemptsRemaining - 1);
+                scheduleFirefoxRetryAttempt(
+                        expectedPackage,
+                        attemptsRemaining - 1,
+                        nextHost,
+                        nextStableReads
+                );
             }
         };
 
         mainHandler.postDelayed(pendingFirefoxRetry, FIREFOX_RETRY_DELAY_MS);
     }
 
-    private void cancelFirefoxRetry() {
-        if (pendingFirefoxRetry == null) return;
-        mainHandler.removeCallbacks(pendingFirefoxRetry);
-        pendingFirefoxRetry = null;
-    }
-
-    private boolean isFirefoxAddressEditing(
+    private String extractFirefoxDisplayedUrl(
             AccessibilityNodeInfo root,
-            AccessibilityNodeInfo source,
             String packageName
     ) {
-        if (!isFirefoxClassicPackage(packageName)) return false;
+        if (root == null || packageName == null) return null;
 
-        // A fonte do evento é confiável para reconhecer o campo de edição mesmo durante a
-        // animação em que isVisibleToUser() pode oscilar.
-        if (hasFirefoxEditViewId(source, packageName)) return true;
-        if (root == null) return false;
-
-        for (String idName : FIREFOX_EDIT_VIEW_IDS) {
+        int expectedWindowId = root.getWindowId();
+        for (String idName : FIREFOX_DISPLAY_VIEW_IDS) {
             String exactId = packageName + ":id/" + idName;
             try {
                 List<AccessibilityNodeInfo> nodes = root.findAccessibilityNodeInfosByViewId(exactId);
@@ -272,25 +273,38 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 for (AccessibilityNodeInfo node : nodes) {
                     if (node == null || !node.isVisibleToUser()) continue;
                     if (!packageName.equals(packageNameOf(node))) continue;
-                    return true;
+
+                    int nodeWindowId = node.getWindowId();
+                    if (expectedWindowId >= 0
+                            && nodeWindowId >= 0
+                            && nodeWindowId != expectedWindowId) {
+                        continue;
+                    }
+
+                    String text = cleanNodeText(node.getText());
+                    if (DomainMatcher.extractHost(text) != null) return text;
+
+                    String description = cleanNodeText(node.getContentDescription());
+                    if (DomainMatcher.extractHost(description) != null) return description;
                 }
             } catch (RuntimeException ignored) {
-                // A toolbar pode ser recriada enquanto a lista de nós é consultada.
+                // O Firefox pode recriar a toolbar durante a leitura; a próxima tentativa cobre isso.
             }
         }
 
-        return false;
+        return null;
     }
 
-    private boolean hasFirefoxEditViewId(AccessibilityNodeInfo node, String packageName) {
-        if (node == null || packageName == null) return false;
-        String viewId = node.getViewIdResourceName();
-        if (viewId == null) return false;
+    private String cleanNodeText(CharSequence value) {
+        if (value == null || value.length() == 0) return null;
+        String cleaned = value.toString().trim();
+        return cleaned.isEmpty() ? null : cleaned;
+    }
 
-        for (String idName : FIREFOX_EDIT_VIEW_IDS) {
-            if ((packageName + ":id/" + idName).equals(viewId)) return true;
-        }
-        return false;
+    private void cancelFirefoxRetry() {
+        if (pendingFirefoxRetry == null) return;
+        mainHandler.removeCallbacks(pendingFirefoxRetry);
+        pendingFirefoxRetry = null;
     }
 
     private void scheduleSamsungRetry(String expectedPackage) {
@@ -334,6 +348,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private AccessibilityNodeInfo applicationRootForPackage(String packageName) {
         if (packageName == null) return null;
 
+        AccessibilityNodeInfo focusedCandidate = null;
+
         try {
             for (AccessibilityWindowInfo window : getWindows()) {
                 if (window == null || window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) {
@@ -341,8 +357,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 }
 
                 AccessibilityNodeInfo candidate = window.getRoot();
-                if (packageName.equals(packageNameOf(candidate))) {
+                if (!packageName.equals(packageNameOf(candidate))) continue;
+
+                if (window.isActive()) {
                     return candidate;
+                }
+
+                if (window.isFocused()) {
+                    focusedCandidate = candidate;
                 }
             }
         } catch (RuntimeException ignored) {
@@ -350,7 +372,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
-        return packageName.equals(packageNameOf(activeRoot)) ? activeRoot : null;
+        if (packageName.equals(packageNameOf(activeRoot))) {
+            return activeRoot;
+        }
+
+        return focusedCandidate;
     }
 
     private boolean sameWindow(AccessibilityEvent event, AccessibilityNodeInfo root) {
