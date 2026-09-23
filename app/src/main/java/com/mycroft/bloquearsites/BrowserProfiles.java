@@ -4,8 +4,10 @@ import com.mycroft.bloquearsites.BrowserProfile.Method;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -14,7 +16,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Um navegador fora da lista é testado com o método de cada família (identificationOrder): a
  * primeira que consegue ler a URL da barra passa a ser a família dele (IdentifiedBrowsers). Se
- * nenhuma consegue, ele é bloqueado.
+ * nenhuma consegue, ele é bloqueado. Navegadores sabidamente sem leitura confiável ficam em
+ * KNOWN_UNSUPPORTED e são sempre bloqueados.
  */
 public final class BrowserProfiles {
     private BrowserProfiles() {}
@@ -128,32 +131,9 @@ public final class BrowserProfiles {
             "suggest_omnibox_query_edit"
     );
 
-    // Via: IDs ofuscados que mudam a cada versão. Por padrão a barra mostra o título da página;
-    // a URL só fica visível com "Conteúdo da caixa de URL" em URL ou Domínio.
-    private static final BrowserProfile VIA = new BrowserProfile(
-            "Via",
-            Method.TOOLBAR_STRUCTURE,
-            new String[]{
-                    "mark.via.gp",
-                    "mark.via"
-            }
-    ).withNote("no Via, mude \u201cConteúdo da caixa de URL\u201d para URL ou Domínio");
-
-    // UC Browser: a barra exibida é montada por código ofuscado. A edição de endereço
-    // (SmartURLWindow) é um campo no topo; a barra exibida só identifica o site se mostrar a URL ou
-    // o domínio, e não o título da página.
-    private static final BrowserProfile UC = new BrowserProfile(
-            "UC Browser",
-            Method.TOOLBAR_STRUCTURE,
-            new String[]{
-                    "com.UCMobile.intl",
-                    "com.UCMobile"
-            }
-    ).withNote("parcial: bloqueia endereços digitados; links só se a barra mostrar a URL");
-
     // Barra sem IDs próprios, lida pela estrutura da tela (texto com URL ou domínio junto à borda,
-    // fora da página). Opera GX (APK 3.3.9) desenha a barra em Compose, sem IDs; navegadores
-    // desconhecidos que só se encaixam por esse método também entram aqui.
+    // fora da página). Opera GX (APK 3.3.9) desenha a barra em Compose, sem IDs. O método depende
+    // de a barra mostrar a URL, então não é usado para aceitar navegadores desconhecidos.
     private static final BrowserProfile STRUCTURAL = new BrowserProfile(
             "Barra na tela",
             Method.TOOLBAR_STRUCTURE,
@@ -168,13 +148,12 @@ public final class BrowserProfiles {
             OPERA,
             DUCKDUCKGO,
             YANDEX,
-            VIA,
-            UC,
             STRUCTURAL
     ));
 
-    // Ordem em que um navegador desconhecido é testado. Via e UC ficam de fora: são famílias de um
-    // navegador só, e o método deles já está na família Barra na tela.
+    // Ordem em que um navegador desconhecido é testado: só famílias lidas por IDs ou pela toolbar do
+    // Firefox. A Barra na tela fica de fora porque aceitaria navegadores que mostram o título da
+    // página em vez da URL, e neles sites abertos por links passariam.
     private static final List<BrowserProfile> IDENTIFICATION_ORDER =
             Collections.unmodifiableList(Arrays.asList(
                     CHROMIUM,
@@ -183,9 +162,21 @@ public final class BrowserProfiles {
                     AOSP_BROWSER,
                     OPERA,
                     DUCKDUCKGO,
-                    YANDEX,
-                    STRUCTURAL
+                    YANDEX
             ));
+
+    // Navegadores testados e sem leitura confiável: nunca são identificados e sempre são bloqueados.
+    // Via e UC mostram o título da página na barra, e sites abertos por links ou pela pesquisa
+    // ficavam acessíveis; UC Mini é a versão antiga (2016) do UC.
+    private static final Set<String> KNOWN_UNSUPPORTED = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    "mark.via.gp",
+                    "mark.via",
+                    "com.UCMobile.intl",
+                    "com.UCMobile",
+                    "com.uc.browser.en"
+            ))
+    );
 
     // Navegadores fora da lista que se encaixaram em uma família. Preenchido pelo IdentifiedBrowsers.
     private static final Map<String, BrowserProfile> IDENTIFIED = new ConcurrentHashMap<>();
@@ -198,8 +189,12 @@ public final class BrowserProfiles {
         return forPackage(packageName) == FIREFOX;
     }
 
+    public static boolean isKnownUnsupported(String packageName) {
+        return packageName != null && KNOWN_UNSUPPORTED.contains(packageName);
+    }
+
     public static BrowserProfile forPackage(String packageName) {
-        if (packageName == null) return null;
+        if (packageName == null || isKnownUnsupported(packageName)) return null;
 
         BrowserProfile listed = listedFamily(packageName);
         return listed != null ? listed : IDENTIFIED.get(packageName);
@@ -219,6 +214,7 @@ public final class BrowserProfiles {
 
     static void registerIdentified(String packageName, BrowserProfile family) {
         if (packageName == null || family == null || listedFamily(packageName) != null) return;
+        if (isKnownUnsupported(packageName) || !IDENTIFICATION_ORDER.contains(family)) return;
         IDENTIFIED.put(packageName, family);
     }
 

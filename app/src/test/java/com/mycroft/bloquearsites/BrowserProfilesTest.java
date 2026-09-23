@@ -68,33 +68,6 @@ public class BrowserProfilesTest {
     }
 
     @Test
-    public void viaIsFoundByToolbarStructure() {
-        BrowserProfile via = BrowserProfiles.forPackage("mark.via.gp");
-
-        assertEquals(Method.TOOLBAR_STRUCTURE, via.getMethod());
-        assertTrue(via.rereadsAfterEvent());
-        assertTrue(via.getAddressViewIds().isEmpty());
-        assertSame(via, BrowserProfiles.forPackage("mark.via"));
-    }
-
-    @Test
-    public void ucBrowserIsFoundByToolbarStructureInItsOwnFamily() {
-        BrowserProfile uc = BrowserProfiles.forPackage("com.UCMobile.intl");
-
-        assertEquals(Method.TOOLBAR_STRUCTURE, uc.getMethod());
-        assertEquals("UC Browser", uc.getFamily());
-        assertSame(uc, BrowserProfiles.forPackage("com.UCMobile"));
-    }
-
-    @Test
-    public void onlyFamiliesWithLimitationsCarryANote() {
-        assertNull(BrowserProfiles.forPackage("com.android.chrome").getNote());
-        assertNull(BrowserProfiles.forPackage("org.mozilla.firefox").getNote());
-        assertTrue(BrowserProfiles.forPackage("mark.via.gp").getNote().contains("URL"));
-        assertTrue(BrowserProfiles.forPackage("com.UCMobile.intl").getNote().startsWith("parcial"));
-    }
-
-    @Test
     public void yandexHasItsOwnFamily() {
         BrowserProfile yandex = BrowserProfiles.forPackage("com.yandex.browser");
 
@@ -115,16 +88,40 @@ public class BrowserProfilesTest {
     }
 
     @Test
-    public void unknownBrowsersAreTestedAgainstEveryReusableFamily() {
+    public void unknownBrowsersAreOnlyAcceptedByReliableFamilies() {
         List<BrowserProfile> order = BrowserProfiles.identificationOrder();
 
         assertSame(BrowserProfiles.chromium(), order.get(0));
         assertTrue(order.contains(BrowserProfiles.firefox()));
         assertTrue(order.contains(BrowserProfiles.forPackage("com.yandex.browser")));
-        assertSame(BrowserProfiles.forPackage("com.opera.gx"), order.get(order.size() - 1));
-        // Via e UC são famílias de um navegador só.
-        assertFalse(order.contains(BrowserProfiles.forPackage("mark.via.gp")));
-        assertFalse(order.contains(BrowserProfiles.forPackage("com.UCMobile.intl")));
+        // A leitura pela estrutura depende de a barra mostrar a URL: só vale para o Opera GX.
+        assertFalse(order.contains(BrowserProfiles.forPackage("com.opera.gx")));
+    }
+
+    @Test
+    public void viaAndUcAreKnownUnsupported() {
+        for (String packageName : Arrays.asList(
+                "mark.via.gp", "mark.via", "com.UCMobile.intl", "com.UCMobile", "com.uc.browser.en")) {
+            assertTrue(BrowserProfiles.isKnownUnsupported(packageName));
+            assertNull(BrowserProfiles.forPackage(packageName));
+        }
+        assertFalse(BrowserProfiles.isKnownUnsupported("com.android.chrome"));
+    }
+
+    @Test
+    public void knownUnsupportedBrowsersAreNeverIdentified() {
+        BrowserProfiles.registerIdentified("mark.via.gp", BrowserProfiles.chromium());
+
+        assertNull(BrowserProfiles.forPackage("mark.via.gp"));
+        assertFalse(BrowserProfiles.isIdentified("mark.via.gp"));
+    }
+
+    @Test
+    public void structuralFamilyIsNotAssignedToUnknownBrowsers() {
+        String unknown = "com.example.titlebrowser";
+        BrowserProfiles.registerIdentified(unknown, BrowserProfiles.forPackage("com.opera.gx"));
+
+        assertNull(BrowserProfiles.forPackage(unknown));
     }
 
     @Test

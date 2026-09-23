@@ -26,22 +26,22 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 | Mi Browser/AOSP | Mi Browser (`com.mi.globalbrowser`) e navegadores da base AOSP (`com.android.browser`, usado pela MIUI) | `VIEW_ID_WITH_REREAD` | `url` (UrlInputView), com a URL sem o esquema |
 | Opera | Opera, Opera Beta, Opera Mini | `VIEW_ID` | `url_field` |
 | DuckDuckGo | DuckDuckGo | `VIEW_ID` | `omnibarTextInput` |
-| Via | `mark.via.gp`, `mark.via` | `TOOLBAR_STRUCTURE` | IDs ofuscados: TextView/EditText encostado no topo ou na base da janela, fora da página, com uma URL ou domínio inteiro |
-| UC Browser | `com.UCMobile.intl`, `com.UCMobile` | `TOOLBAR_STRUCTURE` | barra exibida montada por código ofuscado; o campo de edição de endereço fica no topo |
 | Yandex | Yandex e Yandex Beta | `VIEW_ID` | domínio no título central (`bro_omnibar_address_title_text`/`_view`, `bro_omnibox_collapsed_title` recolhida); edição em `suggest_omnibox_query_edit` |
-| Barra na tela | Opera GX (barra em Compose, sem IDs) e desconhecidos que só se encaixam por esse método | `TOOLBAR_STRUCTURE` | texto com URL ou domínio junto à borda; em seguida, ID com cara de barra de endereço, sempre fora da página |
+| Barra na tela | Opera GX (barra em Compose, sem IDs) | `TOOLBAR_STRUCTURE` | texto com URL ou domínio junto à borda; em seguida, ID com cara de barra de endereço, sempre fora da página |
 
 - `VIEW_ID_WITH_REREAD` e `TOOLBAR_STRUCTURE` ouvem todos os eventos e releem a barra após um curto atraso quando a primeira leitura falha.
-- **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, nas configurações do Via mude **Conteúdo da caixa de URL** (em inglês, *URL field content*) de **Título** para **URL** ou **Domínio**. Com o título, só endereços digitados na barra são bloqueados.
-- **UC Browser:** endereços digitados na barra são bloqueados. Páginas abertas por links só são reconhecidas se a barra do UC mostrar a URL ou o domínio; se ela mostrar o título da página, não há URL a ler.
 - Os pacotes das famílias acima formam a lista de navegadores suportados.
-- **Navegadores fora da lista** são testados com o método de cada família (`IdentifiedBrowsers`, na ordem Chromium, Firefox, Samsung Internet, Mi Browser/AOSP, Opera, DuckDuckGo, Yandex e Barra na tela). A primeira família cujo método lê a URL da barra passa a ser a família do navegador, e o resultado fica salvo. Um derivado do Chrome, por exemplo, se encaixa pelo `url_bar`.
+- **Navegadores fora da lista** são testados com o método de cada família (`IdentifiedBrowsers`, na ordem Chromium, Firefox, Samsung Internet, Mi Browser/AOSP, Opera, DuckDuckGo e Yandex). A primeira família cujo método lê a URL da barra passa a ser a família do navegador, e o resultado fica salvo. Um derivado do Chrome, por exemplo, se encaixa pelo `url_bar`. A Barra na tela não aceita navegadores desconhecidos: ela depende de a barra mostrar a URL, e navegadores que mostram o título da página deixariam passar sites abertos por links.
+
+### Navegadores bloqueados
+
+Via (`mark.via.gp`, `mark.via`), UC Browser (`com.UCMobile.intl`, `com.UCMobile`) e UC Mini (`com.uc.browser.en`) ficam em `KNOWN_UNSUPPORTED`: nos testes, a barra deles mostrava o título da página, e sites abertos por links ou pela pesquisa ficavam acessíveis. Eles nunca são identificados e são fechados assim que aparecem, enquanto houver sites na lista.
 
 ## Navegadores sem suporte
 
 O app identifica como navegador todo app que abre um link `https` de qualquer site (`BrowserDetector`): o teste usa um domínio inexistente, então apps que só abrem links do próprio site (YouTube, redes sociais) não entram. O bloco `<queries>` do manifesto dá essa visibilidade no Android 11+, sem a permissão de ver todos os apps.
 
-Enquanto houver sites na lista, um navegador que não se encaixa em nenhuma família é bloqueado: volta para a tela inicial (ação **Início**), com um aviso. O bloqueio só acontece com uma página web na tela e depois de um novo teste das famílias 2 segundos depois, para não bloquear um navegador que mostra a URL na barra após o conteúdo. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
+Enquanto houver sites na lista, só os navegadores suportados ficam liberados. Um navegador que não se encaixa em nenhuma família é bloqueado: volta para a tela inicial (ação **Início**), com um aviso, e fica registrado como rejeitado (é testado de novo a cada abertura). O bloqueio só acontece com uma página web na tela e depois de um novo teste das famílias 2 segundos depois, para não bloquear um navegador que mostra a URL na barra após o conteúdo. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores instalados: ✅ suportado (com a família), ⛔ não suportado e bloqueado, ❓ em teste (ainda não aberto desde a instalação).
 
 Apps que não são navegadores continuam passando pelo fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…), que cobre alguns navegadores embutidos em outros apps.
 

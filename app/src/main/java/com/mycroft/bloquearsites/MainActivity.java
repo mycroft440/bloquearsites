@@ -153,11 +153,18 @@ public final class MainActivity extends Activity {
         });
 
         TextView browsersTitle = new TextView(this);
-        browsersTitle.setText("Navegadores encontrados");
+        browsersTitle.setText("Navegadores instalados");
         browsersTitle.setTextSize(18f);
         browsersTitle.setTextColor(Color.rgb(35, 35, 35));
-        browsersTitle.setPadding(0, dp(18), 0, dp(6));
+        browsersTitle.setPadding(0, dp(18), 0, dp(2));
         root.addView(browsersTitle, matchWrap());
+
+        TextView browsersHint = new TextView(this);
+        browsersHint.setText("Só os suportados ficam liberados. Enquanto houver sites na lista, os não suportados são fechados ao abrir.");
+        browsersHint.setTextSize(12f);
+        browsersHint.setTextColor(Color.GRAY);
+        browsersHint.setPadding(0, 0, 0, dp(8));
+        root.addView(browsersHint, matchWrap());
 
         browsersView = new TextView(this);
         browsersView.setTextSize(14f);
@@ -202,27 +209,39 @@ public final class MainActivity extends Activity {
 
         IdentifiedBrowsers.load(this);
         BrowserDetector detector = new BrowserDetector(this);
-        List<String> lines = new ArrayList<>();
-        for (String packageName : detector.installedBrowsers()) {
-            BrowserProfile profile = BrowserProfiles.forPackage(packageName);
-            String status;
-            if (profile == null) {
-                status = "verificado ao abrir: compatível se encaixar em uma família;"
-                        + " senão, bloqueado enquanto houver sites na lista";
-            } else if (BrowserProfiles.isIdentified(packageName)) {
-                status = "compatível (encaixado na família " + profile.getFamily() + ")";
-            } else if (profile.getNote() != null) {
-                status = "compatível (" + profile.getNote() + ")";
-            } else {
-                status = "compatível";
-            }
-            lines.add("\u2022 " + detector.labelOf(packageName) + " \u2014 " + status);
-        }
-        Collections.sort(lines, String.CASE_INSENSITIVE_ORDER);
+        List<String> supported = new ArrayList<>();
+        List<String> blocked = new ArrayList<>();
+        List<String> pending = new ArrayList<>();
 
-        browsersView.setText(lines.isEmpty()
+        for (String packageName : detector.installedBrowsers()) {
+            String label = detector.labelOf(packageName);
+            BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+
+            if (profile != null) {
+                supported.add("\u2705 " + label + " \u2014 suportado (" + profile.getFamily() + ")");
+            } else if (BrowserProfiles.isKnownUnsupported(packageName)
+                    || IdentifiedBrowsers.isRejected(this, packageName)) {
+                blocked.add("\u26D4 " + label + " \u2014 não suportado: bloqueado");
+            } else {
+                pending.add("\u2753 " + label
+                        + " \u2014 em teste: é verificado ao abrir uma página e bloqueado se não for compatível");
+            }
+        }
+
+        List<String> sections = new ArrayList<>();
+        addSection(sections, supported);
+        addSection(sections, blocked);
+        addSection(sections, pending);
+
+        browsersView.setText(sections.isEmpty()
                 ? "Nenhum navegador encontrado."
-                : TextUtils.join("\n", lines));
+                : TextUtils.join("\n\n", sections));
+    }
+
+    private void addSection(List<String> sections, List<String> lines) {
+        if (lines.isEmpty()) return;
+        Collections.sort(lines, String.CASE_INSENSITIVE_ORDER);
+        sections.add(TextUtils.join("\n", lines));
     }
 
     private void showAccessibilityDisclosure() {
@@ -232,7 +251,7 @@ public final class MainActivity extends Activity {
                         "Para bloquear os sites que você escolher, o app precisa usar o serviço de acessibilidade para ler o texto visível da barra de endereço dos navegadores e identificar o domínio aberto.\n\n"
                                 + "A URL é comparada somente no aparelho com a sua lista de bloqueio. O app não possui permissão de internet, não envia URLs, histórico ou a lista de sites a terceiros e não altera configurações sem sua ação.\n\n"
                                 + "Quando um domínio bloqueado é detectado, o app cobre a tela e leva o navegador para o Google: toca na barra de endereço, digita google.com e confirma, trocando o site da aba atual. Se não conseguir, abre o Google em uma aba nova.\n\n"
-                                + "Enquanto houver sites na lista, navegadores sem suporte são fechados ao abrir uma página, voltando para a tela inicial."
+                                + "Enquanto houver sites na lista, só os navegadores suportados ficam liberados: os demais são fechados ao abrir, voltando para a tela inicial."
                 )
                 .setNegativeButton("Cancelar", null)
                 .setPositiveButton("Concordo", (dialog, which) -> openAccessibilitySettings())

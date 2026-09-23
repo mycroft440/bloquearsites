@@ -42,7 +42,6 @@ public final class BrowserProfile {
     private final Method method;
     private final Set<String> packageNames;
     private final List<String> addressViewIds;
-    private final String note;
 
     public BrowserProfile(
             String family,
@@ -50,27 +49,10 @@ public final class BrowserProfile {
             String[] packageNames,
             String... addressViewIds
     ) {
-        this(family, method, Collections.unmodifiableSet(new HashSet<>(Arrays.asList(packageNames))),
-                Collections.unmodifiableList(Arrays.asList(addressViewIds)), null);
-    }
-
-    private BrowserProfile(
-            String family,
-            Method method,
-            Set<String> packageNames,
-            List<String> addressViewIds,
-            String note
-    ) {
         this.family = family;
         this.method = method;
-        this.packageNames = packageNames;
-        this.addressViewIds = addressViewIds;
-        this.note = note;
-    }
-
-    /** Cópia com uma observação para o usuário, exibida na lista de navegadores do app. */
-    public BrowserProfile withNote(String note) {
-        return new BrowserProfile(family, method, packageNames, addressViewIds, note);
+        this.packageNames = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(packageNames)));
+        this.addressViewIds = Collections.unmodifiableList(Arrays.asList(addressViewIds));
     }
 
     public boolean matchesPackage(String packageName) {
@@ -91,11 +73,6 @@ public final class BrowserProfile {
 
     public List<String> getAddressViewIds() {
         return addressViewIds;
-    }
-
-    /** Limitação ou ajuste necessário no navegador, ou null. */
-    public String getNote() {
-        return note;
     }
 
     /** Ouve todos os tipos de evento e relê a barra se a primeira leitura falhar. */

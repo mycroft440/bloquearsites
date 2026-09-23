@@ -116,6 +116,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // Navegadores sabidamente sem leitura confiável (Via, UC) são fechados assim que aparecem.
+        if (profile == null && BrowserProfiles.isKnownUnsupported(packageName)) {
+            closeUnsupportedBrowser(packageName);
+            return;
+        }
+
         if (browserDetector == null) browserDetector = new BrowserDetector(this);
         if (profile == null && browserDetector.isBrowser(packageName)) {
             // Navegador fora da lista: é testado com o método de cada família. Encaixado, passa a
@@ -249,6 +255,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 return;
             }
 
+            IdentifiedBrowsers.markRejected(this, packageName);
             closeUnsupportedBrowser(packageName);
         };
         mainHandler.postDelayed(pendingUnsupportedCheck, UNSUPPORTED_BROWSER_GRACE_MS);
@@ -273,7 +280,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         Toast.makeText(
                 this,
                 browserDetector.labelOf(packageName)
-                        + " não é compatível com o Bloquear Sites e foi fechado.",
+                        + " não é suportado pelo Bloquear Sites e foi fechado.",
                 Toast.LENGTH_LONG
         ).show();
     }

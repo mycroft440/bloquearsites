@@ -12,10 +12,12 @@ import java.util.Map;
  * O navegador é testado com o método de cada família, na ordem de
  * BrowserProfiles.identificationOrder(): a primeira que consegue ler a URL da barra dele passa a ser
  * a família dele. O resultado fica salvo para as próximas aberturas e para a tela do app. Se
- * nenhuma família se encaixa, o serviço bloqueia o navegador.
+ * nenhuma família se encaixa, o serviço bloqueia o navegador e o registra como rejeitado; ele é
+ * testado de novo a cada abertura.
  */
 final class IdentifiedBrowsers {
     private static final String PREFS_NAME = "identified_browsers";
+    private static final String REJECTED_PREFS_NAME = "rejected_browsers";
 
     private IdentifiedBrowsers() {}
 
@@ -45,10 +47,24 @@ final class IdentifiedBrowsers {
             if (urlExtractor.extractAs(family, root, packageName) != null) {
                 BrowserProfiles.registerIdentified(packageName, family);
                 prefs(context).edit().putString(packageName, family.getFamily()).apply();
+                rejectedPrefs(context).edit().remove(packageName).apply();
                 return family;
             }
         }
         return null;
+    }
+
+    /** Registra que o navegador não se encaixou em nenhuma família e foi bloqueado. */
+    static void markRejected(Context context, String packageName) {
+        rejectedPrefs(context).edit().putBoolean(packageName, true).apply();
+    }
+
+    static boolean isRejected(Context context, String packageName) {
+        return rejectedPrefs(context).getBoolean(packageName, false);
+    }
+
+    private static SharedPreferences rejectedPrefs(Context context) {
+        return context.getSharedPreferences(REJECTED_PREFS_NAME, Context.MODE_PRIVATE);
     }
 
     private static SharedPreferences prefs(Context context) {
