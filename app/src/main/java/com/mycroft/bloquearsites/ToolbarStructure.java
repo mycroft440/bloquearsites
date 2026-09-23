@@ -4,7 +4,7 @@ import android.graphics.Rect;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 /**
- * Localiza a barra de endereço pela estrutura da tela, para navegadores com IDs ofuscados (Via).
+ * Localiza a barra de endereço pela estrutura da tela, para navegadores sem IDs (Opera GX).
  *
  * A barra é um TextView/EditText baixo, encostado no topo ou na base da janela, dentro de uma
  * faixa larga, e fica fora do conteúdo da página. Na exibição, só vale o texto que é inteiro uma
@@ -42,6 +42,20 @@ final class ToolbarStructure {
         Rect rootBounds = boundsOf(root);
         return NodeSearch.findFirst(root, node ->
                 wholeUrl(node.getText()) != null && isToolbarText(node, rootBounds, packageName));
+    }
+
+    /**
+     * Qualquer texto na faixa da barra, mesmo que não seja uma URL (termos pesquisados, título).
+     * Indica que a barra está na tela.
+     */
+    static AccessibilityNodeInfo findToolbarText(AccessibilityNodeInfo root, String packageName) {
+        Rect rootBounds = boundsOf(root);
+        return NodeSearch.findFirst(root, node -> {
+            CharSequence text = node.getText();
+            return text != null
+                    && text.toString().trim().length() > 0
+                    && isToolbarText(node, rootBounds, packageName);
+        });
     }
 
     /** O texto inteiro do nó, quando ele é uma URL ou um domínio. */

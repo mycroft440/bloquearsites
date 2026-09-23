@@ -209,6 +209,7 @@ public final class MainActivity extends Activity {
 
         IdentifiedBrowsers.load(this);
         BrowserDetector detector = new BrowserDetector(this);
+        VerifiedBrowsers verified = new VerifiedBrowsers(this);
         List<String> supported = new ArrayList<>();
         List<String> blocked = new ArrayList<>();
         List<String> pending = new ArrayList<>();
@@ -217,7 +218,10 @@ public final class MainActivity extends Activity {
             String label = detector.labelOf(packageName);
             BrowserProfile profile = BrowserProfiles.forPackage(packageName);
 
-            if (profile != null) {
+            if (profile != null && verified.hasFailed(packageName)) {
+                blocked.add("\u26D4 " + label
+                        + " \u2014 barra de endereço não lida nesta versão: bloqueado");
+            } else if (profile != null) {
                 supported.add("\u2705 " + label + " \u2014 suportado (" + profile.getFamily() + ")");
             } else if (BrowserProfiles.isKnownUnsupported(packageName)
                     || IdentifiedBrowsers.isRejected(this, packageName)) {

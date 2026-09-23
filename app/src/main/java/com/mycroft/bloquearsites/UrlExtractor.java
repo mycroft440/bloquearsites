@@ -59,6 +59,53 @@ public final class UrlExtractor {
         }
     }
 
+    /**
+     * Se a barra de endereço da família está na tela, mesmo sem uma URL: nas páginas de resultado,
+     * a barra do Mi Browser mostra os termos pesquisados. Confirma que o método da família ainda
+     * acha a barra na versão instalada do navegador. Uma URL lida por qualquer caminho do bloqueio,
+     * inclusive o fallback genérico, também conta.
+     */
+    boolean hasAddressBar(AccessibilityNodeInfo root, String packageName, BrowserProfile profile) {
+        if (root == null || packageName == null || profile == null) return false;
+        if (extract(root, null, packageName) != null) return true;
+
+        switch (profile.getMethod()) {
+            case FIREFOX_TOOLBAR:
+                if (hasVisibleNodeWithId(root, packageName, profile.getAddressViewIds())) return true;
+                return NodeSearch.findFirst(root, node ->
+                        (FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_BOX_TAG)
+                                || FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.URL_TAG)
+                                || FirefoxToolbarNodes.hasTag(node, FirefoxToolbarNodes.SEARCH_BOX_TAG))
+                                && NodeSearch.isVisibleInPackage(node, packageName)) != null;
+            case TOOLBAR_STRUCTURE:
+                return extractToolbarDisplay(root, packageName) != null
+                        || ToolbarStructure.findToolbarText(root, packageName) != null;
+            default:
+                return hasVisibleNodeWithId(root, packageName, profile.getAddressViewIds());
+        }
+    }
+
+    private boolean hasVisibleNodeWithId(
+            AccessibilityNodeInfo root,
+            String packageName,
+            List<String> ids
+    ) {
+        for (String idName : ids) {
+            try {
+                List<AccessibilityNodeInfo> nodes =
+                        root.findAccessibilityNodeInfosByViewId(packageName + ":id/" + idName);
+                if (nodes == null) continue;
+
+                for (AccessibilityNodeInfo node : nodes) {
+                    if (node != null && NodeSearch.isVisibleInPackage(node, packageName)) return true;
+                }
+            } catch (RuntimeException ignored) {
+                // A barra pode ser recriada durante a leitura; a próxima checagem cobre isso.
+            }
+        }
+        return false;
+    }
+
     private String extractByViewIds(
             AccessibilityNodeInfo root,
             AccessibilityNodeInfo eventSource,

@@ -23,7 +23,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long REREAD_DELAY_MS = 250L;
     private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
     private static final long UNSUPPORTED_BROWSER_GRACE_MS = 2000L;
+    // Com a confirmação da família em andamento, a checagem do navegador desconhecido se repete.
+    private static final int UNSUPPORTED_BROWSER_CHECKS = 3;
     private static final long IDENTIFY_INTERVAL_MS = 400L;
+    // Prazo para achar a barra numa versão ainda não conferida do navegador, e o prazo curto depois
+    // de uma falha na mesma versão.
+    private static final long ADDRESS_BAR_CHECK_MS = 5000L;
+    private static final long ADDRESS_BAR_RECHECK_MS = 1500L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -37,6 +43,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     private final UrlExtractor urlExtractor = new UrlExtractor();
     private BrowserDetector browserDetector;
+    private VerifiedBrowsers verifiedBrowsers;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private BlockedSitesStore store;
@@ -48,6 +55,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private Runnable pendingReread;
     private Runnable pendingUnsupportedCheck;
     private String pendingUnsupportedPackage;
+    private Runnable pendingAddressBarCheck;
+    private String pendingAddressBarPackage;
     private String lastIdentifyPackage = "";
     private long lastIdentifyAt = 0L;
     private String lastUnsupportedBrowser = "";
@@ -58,6 +67,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         store = new BlockedSitesStore(this);
         browserDetector = new BrowserDetector(this);
+        verifiedBrowsers = new VerifiedBrowsers(this);
         IdentifiedBrowsers.load(this);
         redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
 
@@ -145,6 +155,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                     : applicationRootForPackage(packageName);
             profile = IdentifiedBrowsers.identify(this, urlExtractor, packageName, browserRoot);
             if (profile == null) {
+                // Já recusado antes: é fechado assim que mostra uma página, sem o novo prazo. Só
+                // ganha o prazo se uma família acabou de ler a URL e aguarda a confirmação.
+                if (IdentifiedBrowsers.isRejected(this, packageName)
+                        && !IdentifiedBrowsers.isAwaitingConfirmation(packageName)
+                        && NodeSearch.containsWebContent(browserRoot)) {
+                    cancelUnsupportedBrowserCheck();
+                    closeUnsupportedBrowser(packageName);
+                    return;
+                }
                 scheduleUnsupportedBrowserCheck(packageName, browserRoot);
                 return;
             }
@@ -152,6 +171,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             firefox = profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR;
             rereads = profile.rereadsAfterEvent();
         }
+
+        verifyAddressBar(packageName, profile, root);
 
         if (firefox) {
             // Texto digitado e sugestões nunca contam como URL navegada. Todo evento do Firefox
@@ -242,6 +263,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         if (pendingUnsupportedCheck != null && packageName.equals(pendingUnsupportedPackage)) return;
 
         cancelUnsupportedBrowserCheck();
+        postUnsupportedBrowserCheck(packageName, 1);
+    }
+
+    private void postUnsupportedBrowserCheck(String packageName, int check) {
         pendingUnsupportedPackage = packageName;
         pendingUnsupportedCheck = () -> {
             pendingUnsupportedCheck = null;
@@ -261,6 +286,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 return;
             }
 
+            // Uma família leu a URL há pouco: a confirmação precisa de mais tempo.
+            if (IdentifiedBrowsers.isAwaitingConfirmation(packageName)
+                    && check < UNSUPPORTED_BROWSER_CHECKS) {
+                postUnsupportedBrowserCheck(packageName, check + 1);
+                return;
+            }
+
             IdentifiedBrowsers.markRejected(this, packageName);
             closeUnsupportedBrowser(packageName);
         };
@@ -273,7 +305,98 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         pendingUnsupportedCheck = null;
     }
 
+    /**
+     * Rede de segurança para navegadores suportados ou identificados: a cada versão do navegador
+     * (e do app), a barra da família precisa ser achada ao menos uma vez com uma página na tela.
+     * Se uma atualização muda a barra e o método deixa de achá-la, o navegador é fechado em vez de
+     * deixar os sites passarem.
+     *
+     * Basta a barra estar na tela, sem uma URL: nas páginas de resultado, o Mi Browser mostra os
+     * termos pesquisados. Depois de achada, a barra só é conferida de novo na próxima atualização,
+     * porque ela some de verdade ao rolar a página (Chrome) ou em tela cheia.
+     */
+    private void verifyAddressBar(
+            String packageName,
+            BrowserProfile profile,
+            AccessibilityNodeInfo root
+    ) {
+        if (verifiedBrowsers == null) verifiedBrowsers = new VerifiedBrowsers(this);
+        if (verifiedBrowsers.isVerified(packageName)) return;
+
+        AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(root))
+                ? root
+                : applicationRootForPackage(packageName);
+        if (!NodeSearch.containsWebContent(browserRoot)) return;
+
+        if (urlExtractor.hasAddressBar(browserRoot, packageName, profile)) {
+            verifiedBrowsers.markVerified(packageName);
+            if (packageName.equals(pendingAddressBarPackage)) cancelAddressBarCheck();
+            return;
+        }
+
+        scheduleAddressBarCheck(
+                packageName,
+                verifiedBrowsers.hasFailed(packageName)
+                        ? ADDRESS_BAR_RECHECK_MS
+                        : ADDRESS_BAR_CHECK_MS
+        );
+    }
+
+    private void scheduleAddressBarCheck(String packageName, long delayMs) {
+        // Eventos seguidos não adiam o prazo, que conta desde a primeira página sem barra.
+        if (pendingAddressBarCheck != null && packageName.equals(pendingAddressBarPackage)) return;
+
+        cancelAddressBarCheck();
+        pendingAddressBarPackage = packageName;
+        pendingAddressBarCheck = () -> {
+            pendingAddressBarCheck = null;
+            if (verifiedBrowsers.isVerified(packageName)) return;
+
+            if (store == null) store = new BlockedSitesStore(this);
+            if (store.getSet().isEmpty()) return;
+            if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
+                return;
+            }
+
+            BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+            AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+            if (profile == null || root == null || !NodeSearch.containsWebContent(root)) return;
+
+            if (urlExtractor.hasAddressBar(root, packageName, profile)) {
+                verifiedBrowsers.markVerified(packageName);
+                return;
+            }
+
+            verifiedBrowsers.markFailed(packageName);
+            closeBrowser(
+                    packageName,
+                    labelOf(packageName)
+                            + " foi fechado: o Bloquear Sites não conseguiu ler a barra de"
+                            + " endereço desta versão."
+            );
+        };
+        mainHandler.postDelayed(pendingAddressBarCheck, delayMs);
+    }
+
+    private void cancelAddressBarCheck() {
+        if (pendingAddressBarCheck == null) return;
+        mainHandler.removeCallbacks(pendingAddressBarCheck);
+        pendingAddressBarCheck = null;
+    }
+
     private void closeUnsupportedBrowser(String packageName) {
+        closeBrowser(
+                packageName,
+                labelOf(packageName) + " não é suportado pelo Bloquear Sites e foi fechado."
+        );
+    }
+
+    private String labelOf(String packageName) {
+        if (browserDetector == null) browserDetector = new BrowserDetector(this);
+        return browserDetector.labelOf(packageName);
+    }
+
+    private void closeBrowser(String packageName, String message) {
         long now = SystemClock.elapsedRealtime();
         if (packageName.equals(lastUnsupportedBrowser)
                 && now - lastUnsupportedBrowserAt < UNSUPPORTED_BROWSER_DEBOUNCE_MS) {
@@ -283,12 +406,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         lastUnsupportedBrowserAt = now;
 
         performGlobalAction(GLOBAL_ACTION_HOME);
-        Toast.makeText(
-                this,
-                browserDetector.labelOf(packageName)
-                        + " não é suportado pelo Bloquear Sites e foi fechado.",
-                Toast.LENGTH_LONG
-        ).show();
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     private void scheduleFirefoxRetry(String expectedPackage) {
@@ -525,6 +643,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelFirefoxRetry();
         cancelReread();
         cancelUnsupportedBrowserCheck();
+        cancelAddressBarCheck();
     }
 
     @Override
@@ -532,6 +651,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelFirefoxRetry();
         cancelReread();
         cancelUnsupportedBrowserCheck();
+        cancelAddressBarCheck();
         if (redirectController != null) {
             redirectController.destroy();
             redirectController = null;
