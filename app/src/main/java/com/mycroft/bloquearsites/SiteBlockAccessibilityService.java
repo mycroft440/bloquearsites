@@ -51,6 +51,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         store = new BlockedSitesStore(this);
         browserDetector = new BrowserDetector(this);
+        IdentifiedBrowsers.load(this);
         redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
 
         AccessibilityServiceInfo info = getServiceInfo();
@@ -109,12 +110,22 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // Navegadores fora das famílias suportadas não têm a barra lida; enquanto houver sites
-        // bloqueados, eles são fechados para não servirem de desvio.
         if (browserDetector == null) browserDetector = new BrowserDetector(this);
-        if (profile == null && browserDetector.isUnsupportedBrowser(packageName)) {
-            closeUnsupportedBrowser(packageName, root);
-            return;
+        if (profile == null && browserDetector.isBrowser(packageName)) {
+            // Derivados do Chromium e do Firefox mantêm a barra da base: reconhecidos na tela,
+            // passam a usar a família dela. Os demais navegadores não têm a barra lida e, enquanto
+            // houver sites bloqueados, são fechados para não servirem de desvio.
+            AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(root))
+                    ? root
+                    : applicationRootForPackage(packageName);
+            profile = IdentifiedBrowsers.identify(this, packageName, browserRoot);
+            if (profile == null) {
+                closeUnsupportedBrowser(packageName, browserRoot);
+                return;
+            }
+
+            firefox = profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR;
+            rereads = profile.rereadsAfterEvent();
         }
 
         if (firefox) {
@@ -191,11 +202,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         blockCurrentPage(packageName);
     }
 
-    private void closeUnsupportedBrowser(String packageName, AccessibilityNodeInfo activeRoot) {
-        AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(activeRoot))
-                ? activeRoot
-                : applicationRootForPackage(packageName);
-
+    private void closeUnsupportedBrowser(String packageName, AccessibilityNodeInfo browserRoot) {
         // Sem página web na tela o app ainda não está navegando, ou não é de fato um navegador
         // (gerenciadores de download também abrem links).
         if (!NodeSearch.containsWebContent(browserRoot)) return;

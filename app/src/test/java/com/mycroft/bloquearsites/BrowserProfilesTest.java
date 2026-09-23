@@ -94,6 +94,35 @@ public class BrowserProfilesTest {
     }
 
     @Test
+    public void knownDerivativesAreListedInTheirBaseFamily() {
+        assertTrue(BrowserProfiles.isChromium("org.cromite.cromite"));
+        assertTrue(BrowserProfiles.isChromium("org.chromium.chrome"));
+        assertTrue(BrowserProfiles.isFirefox("io.github.forkmaintainers.iceraven"));
+        assertTrue(BrowserProfiles.isFirefox("us.spotco.fennec_dos"));
+    }
+
+    @Test
+    public void identifiedDerivativeUsesItsBaseFamily() {
+        String derivative = "com.example.chromiumfork";
+        assertNull(BrowserProfiles.forPackage(derivative));
+
+        BrowserProfiles.registerIdentified(derivative, BrowserProfiles.familyNamed("Chromium"));
+
+        assertSame(BrowserProfiles.chromium(), BrowserProfiles.forPackage(derivative));
+        assertTrue(BrowserProfiles.isChromium(derivative));
+        assertTrue(BrowserProfiles.isIdentified(derivative));
+        assertNull(BrowserProfiles.listedFamily(derivative));
+    }
+
+    @Test
+    public void listedPackagesAreNeverOverriddenByIdentification() {
+        BrowserProfiles.registerIdentified("com.android.chrome", BrowserProfiles.firefox());
+
+        assertTrue(BrowserProfiles.isChromium("com.android.chrome"));
+        assertFalse(BrowserProfiles.isIdentified("com.android.chrome"));
+    }
+
+    @Test
     public void everyPackageBelongsToASingleFamily() {
         Set<String> seen = new HashSet<>();
         for (BrowserProfile profile : BrowserProfiles.all()) {

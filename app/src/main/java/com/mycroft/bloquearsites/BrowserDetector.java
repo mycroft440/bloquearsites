@@ -45,11 +45,6 @@ final class BrowserDetector {
         return browser;
     }
 
-    /** Navegador instalado que não pertence a nenhuma família suportada. */
-    boolean isUnsupportedBrowser(String packageName) {
-        return BrowserProfiles.forPackage(packageName) == null && isBrowser(packageName);
-    }
-
     /** Pacotes de todos os navegadores instalados, em ordem alfabética. */
     List<String> installedBrowsers() {
         TreeSet<String> packages = new TreeSet<>();

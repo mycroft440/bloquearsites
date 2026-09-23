@@ -5,15 +5,21 @@ import com.mycroft.bloquearsites.BrowserProfile.Method;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Famílias de navegadores. Navegadores que expõem a barra de endereço do mesmo jeito ficam no
  * mesmo perfil; uma diferença na forma de identificação pede um perfil próprio.
+ *
+ * Além dos pacotes listados, derivados do Chromium e do Firefox que não estão na lista entram na
+ * família da base quando a barra dela é reconhecida na tela (IdentifiedBrowsers).
  */
 public final class BrowserProfiles {
     private BrowserProfiles() {}
 
-    // Chromium: url_bar é um EditText que mostra a URL e vira o campo de edição ao ser tocado.
+    // Chromium e derivados que mantêm a interface do Chrome: url_bar é um EditText que mostra a URL
+    // e vira o campo de edição ao ser tocado.
     private static final BrowserProfile CHROMIUM = new BrowserProfile(
             "Chromium",
             Method.VIEW_ID,
@@ -31,7 +37,11 @@ public final class BrowserProfiles {
                     "com.microsoft.emmx.canary",
                     "com.vivaldi.browser",
                     "com.vivaldi.browser.snapshot",
-                    "com.kiwibrowser.browser"
+                    "com.kiwibrowser.browser",
+                    "org.chromium.chrome",
+                    "org.cromite.cromite",
+                    "org.bromite.bromite",
+                    "us.spotco.mulch"
             },
             "url_bar"
     );
@@ -46,7 +56,10 @@ public final class BrowserProfiles {
                     "org.mozilla.firefox",
                     "org.mozilla.firefox_beta",
                     "org.mozilla.fenix",
-                    "org.torproject.torbrowser"
+                    "org.torproject.torbrowser",
+                    "org.mozilla.fennec_fdroid",
+                    "io.github.forkmaintainers.iceraven",
+                    "us.spotco.fennec_dos"
             },
             "mozac_browser_toolbar_url_view",
             "mozac_browser_toolbar_edit_url_view",
@@ -132,19 +145,54 @@ public final class BrowserProfiles {
             UC
     ));
 
+    // Derivados reconhecidos pela barra na tela. Preenchido pelo IdentifiedBrowsers.
+    private static final Map<String, BrowserProfile> IDENTIFIED = new ConcurrentHashMap<>();
+
     public static boolean isChromium(String packageName) {
-        return CHROMIUM.matchesPackage(packageName);
+        return forPackage(packageName) == CHROMIUM;
     }
 
     public static boolean isFirefox(String packageName) {
-        return FIREFOX.matchesPackage(packageName);
+        return forPackage(packageName) == FIREFOX;
     }
 
     public static BrowserProfile forPackage(String packageName) {
+        if (packageName == null) return null;
+
+        BrowserProfile listed = listedFamily(packageName);
+        return listed != null ? listed : IDENTIFIED.get(packageName);
+    }
+
+    /** Família da lista fixa de pacotes, sem considerar os derivados identificados. */
+    static BrowserProfile listedFamily(String packageName) {
         for (BrowserProfile profile : PROFILES) {
             if (profile.matchesPackage(packageName)) return profile;
         }
         return null;
+    }
+
+    static boolean isIdentified(String packageName) {
+        return packageName != null && IDENTIFIED.containsKey(packageName);
+    }
+
+    static void registerIdentified(String packageName, BrowserProfile family) {
+        if (packageName == null || family == null || listedFamily(packageName) != null) return;
+        IDENTIFIED.put(packageName, family);
+    }
+
+    static BrowserProfile familyNamed(String family) {
+        for (BrowserProfile profile : PROFILES) {
+            if (profile.getFamily().equals(family)) return profile;
+        }
+        return null;
+    }
+
+    static BrowserProfile chromium() {
+        return CHROMIUM;
+    }
+
+    static BrowserProfile firefox() {
+        return FIREFOX;
     }
 
     static List<BrowserProfile> all() {

@@ -20,8 +20,8 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 
 | Família | Pacotes | Método | Como a barra é achada |
 |---|---|---|---|
-| Chromium | Chrome (estável/Beta/Dev/Canary), Brave, Edge, Vivaldi, Kiwi | `VIEW_ID` | `url_bar` (EditText) |
-| Firefox | Firefox, Firefox Beta, Nightly, Tor Browser | `FIREFOX_TOOLBAR` | barra em Jetpack Compose (`ADDRESSBAR_URL_BOX`, URL lida da descrição de acessibilidade) ou barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`); só a URL exibida conta, confirmada por leituras estáveis |
+| Chromium | Chrome (estável/Beta/Dev/Canary), Brave, Edge, Vivaldi, Kiwi, Chromium, Cromite, Bromite, Mulch | `VIEW_ID` | `url_bar` (EditText) |
+| Firefox | Firefox, Firefox Beta, Nightly, Tor Browser, Fennec F-Droid, Iceraven, Mull | `FIREFOX_TOOLBAR` | barra em Jetpack Compose (`ADDRESSBAR_URL_BOX`, URL lida da descrição de acessibilidade) ou barras antigas em View (`mozac_browser_toolbar_url_view`, `url_bar_title`); só a URL exibida conta, confirmada por leituras estáveis |
 | Samsung Internet | Samsung Internet e Beta | `VIEW_ID_WITH_REREAD` | `location_bar_edit_text` (UrlBar) e `compact_url_text` (barra compacta ao rolar); o domínio vem precedido da marca invisível U+200E |
 | Mi Browser/AOSP | Mi Browser (`com.mi.globalbrowser`) e navegadores da base AOSP (`com.android.browser`, usado pela MIUI) | `VIEW_ID_WITH_REREAD` | `url` (UrlInputView), com a URL sem o esquema |
 | Opera | Opera, Opera Beta, Opera Mini | `VIEW_ID` | `url_field` |
@@ -33,12 +33,13 @@ Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma famí
 - **Via:** por padrão a barra mostra o título da página, e a URL não fica exposta. Para o bloqueio funcionar, nas configurações do Via mude **Conteúdo da caixa de URL** (em inglês, *URL field content*) de **Título** para **URL** ou **Domínio**. Com o título, só endereços digitados na barra são bloqueados.
 - **UC Browser:** endereços digitados na barra são bloqueados. Páginas abertas por links só são reconhecidas se a barra do UC mostrar a URL ou o domínio; se ela mostrar o título da página, não há URL a ler.
 - Os pacotes das famílias acima formam a lista de navegadores suportados.
+- **Derivados fora da lista** também são suportados: quando um navegador desconhecido mostra uma página, o app procura na tela a barra da base (`url_bar` do Chromium; `mozac_browser_toolbar_*` ou `ADDRESSBAR_URL_BOX`/`ADDRESSBAR_SEARCH_BOX` do Firefox). Reconhecido, ele passa a usar a família da base, e o resultado fica salvo (`IdentifiedBrowsers`).
 
 ## Navegadores sem suporte
 
 O app identifica como navegador todo app que abre um link `https` de qualquer site (`BrowserDetector`): o teste usa um domínio inexistente, então apps que só abrem links do próprio site (YouTube, redes sociais) não entram. O bloco `<queries>` do manifesto dá essa visibilidade no Android 11+, sem a permissão de ver todos os apps.
 
-Enquanto houver sites na lista, um navegador que não pertence a nenhuma família é fechado (ação **Início**, com um aviso) assim que mostra uma página web. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
+Enquanto houver sites na lista, um navegador que não pertence a nenhuma família e não é reconhecido como derivado é fechado (ação **Início**, com um aviso) assim que mostra uma página web. Exigir conteúdo web na tela evita fechar apps que abrem links sem navegar, como gerenciadores de download. A tela inicial do app lista os navegadores encontrados e se cada um é compatível ou será fechado.
 
 Apps que não são navegadores continuam passando pelo fallback genérico baseado no ID do nó (`url_bar`, `address_bar`, `omnibar`…), que cobre alguns navegadores embutidos em outros apps.
 

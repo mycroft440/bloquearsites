@@ -200,13 +200,17 @@ public final class MainActivity extends Activity {
     private void refreshBrowsers() {
         if (browsersView == null) return;
 
+        IdentifiedBrowsers.load(this);
         BrowserDetector detector = new BrowserDetector(this);
         List<String> lines = new ArrayList<>();
         for (String packageName : detector.installedBrowsers()) {
             BrowserProfile profile = BrowserProfiles.forPackage(packageName);
             String status;
             if (profile == null) {
-                status = "sem suporte: fechado enquanto houver sites bloqueados";
+                status = "verificado ao abrir: compatível se usar a base do Chrome ou do Firefox;"
+                        + " senão, fechado enquanto houver sites bloqueados";
+            } else if (BrowserProfiles.isIdentified(packageName)) {
+                status = "compatível (reconhecido como " + profile.getFamily() + ")";
             } else if (profile.getNote() != null) {
                 status = "compatível (" + profile.getNote() + ")";
             } else {
