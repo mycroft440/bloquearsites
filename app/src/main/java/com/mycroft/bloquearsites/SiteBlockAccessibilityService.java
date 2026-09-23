@@ -22,6 +22,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long REREAD_DELAY_MS = 250L;
     private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
     private static final long UNSUPPORTED_BROWSER_GRACE_MS = 2000L;
+    private static final long IDENTIFY_INTERVAL_MS = 400L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -46,6 +47,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private Runnable pendingReread;
     private Runnable pendingUnsupportedCheck;
     private String pendingUnsupportedPackage;
+    private String lastIdentifyPackage = "";
+    private long lastIdentifyAt = 0L;
     private String lastUnsupportedBrowser = "";
     private long lastUnsupportedBrowserAt = 0L;
 
@@ -115,21 +118,23 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (browserDetector == null) browserDetector = new BrowserDetector(this);
         if (profile == null && browserDetector.isBrowser(packageName)) {
-            // Navegador fora da lista: suportado se o app consegue ler a barra dele (derivados do
-            // Chromium e do Firefox, barras reconhecidas pelo fallback genérico ou uma URL lida).
-            // Os demais, enquanto houver sites bloqueados, são fechados para não servirem de desvio.
+            // Navegador fora da lista: é testado com o método de cada família. Encaixado, passa a
+            // usar a família; se nenhuma se encaixa, é bloqueado enquanto houver sites na lista,
+            // para não servir de desvio.
+            long now = SystemClock.elapsedRealtime();
+            if (packageName.equals(lastIdentifyPackage) && now - lastIdentifyAt < IDENTIFY_INTERVAL_MS) {
+                return;
+            }
+            lastIdentifyPackage = packageName;
+            lastIdentifyAt = now;
+
             AccessibilityNodeInfo browserRoot = packageName.equals(packageNameOf(root))
                     ? root
                     : applicationRootForPackage(packageName);
-            profile = IdentifiedBrowsers.identify(this, packageName, browserRoot);
+            profile = IdentifiedBrowsers.identify(this, urlExtractor, packageName, browserRoot);
             if (profile == null) {
-                String genericUrl = urlExtractor.extract(browserRoot, source, packageName);
-                if (genericUrl == null) {
-                    scheduleUnsupportedBrowserCheck(packageName, browserRoot);
-                    return;
-                }
-                profile = BrowserProfiles.generic();
-                IdentifiedBrowsers.remember(this, packageName, profile);
+                scheduleUnsupportedBrowserCheck(packageName, browserRoot);
+                return;
             }
 
             firefox = profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR;
@@ -211,9 +216,9 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     }
 
     /**
-     * Confere de novo, após um intervalo, um navegador cuja barra não foi lida. Só fecha se a
-     * página continua na tela e a barra continua ilegível: um navegador pode montar a barra depois
-     * do conteúdo.
+     * Confere de novo, após um intervalo, um navegador que não se encaixou em nenhuma família. Só
+     * bloqueia se a página continua na tela e ainda nenhuma família se encaixa: um navegador pode
+     * mostrar a URL na barra depois do conteúdo.
      */
     private void scheduleUnsupportedBrowserCheck(
             String packageName,
@@ -236,12 +241,11 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
             AccessibilityNodeInfo root = applicationRootForPackage(packageName);
             if (root == null || !NodeSearch.containsWebContent(root)) return;
-            if (IdentifiedBrowsers.identify(this, packageName, root) != null) return;
 
-            String url = urlExtractor.extract(root, null, packageName);
-            if (url != null) {
-                IdentifiedBrowsers.remember(this, packageName, BrowserProfiles.generic());
-                handleVisibleUrl(packageName, url, blockedSites);
+            BrowserProfile family = IdentifiedBrowsers.identify(this, urlExtractor, packageName, root);
+            if (family != null) {
+                String url = urlExtractor.extract(root, null, packageName);
+                if (url != null) handleVisibleUrl(packageName, url, blockedSites);
                 return;
             }
 

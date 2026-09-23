@@ -42,6 +42,23 @@ public final class UrlExtractor {
         }
     }
 
+    /**
+     * Lê a URL com o método de uma família, sem os fallbacks. Um navegador desconhecido se encaixa
+     * na família cujo método consegue ler a URL da barra dele.
+     */
+    String extractAs(BrowserProfile family, AccessibilityNodeInfo root, String packageName) {
+        if (family == null || root == null || packageName == null) return null;
+
+        switch (family.getMethod()) {
+            case FIREFOX_TOOLBAR:
+                return extractFirefoxDisplayedUrl(root, packageName);
+            case TOOLBAR_STRUCTURE:
+                return extractToolbarDisplay(root, packageName);
+            default:
+                return extractWithProfile(root, packageName, family);
+        }
+    }
+
     private String extractByViewIds(
             AccessibilityNodeInfo root,
             AccessibilityNodeInfo eventSource,
@@ -69,8 +86,22 @@ public final class UrlExtractor {
         AccessibilityNodeInfo editing = ToolbarStructure.findFocusedEditField(root, packageName);
         if (editing != null) return ToolbarStructure.wholeUrl(editing.getText());
 
+        return extractToolbarDisplay(root, packageName);
+    }
+
+    /**
+     * Barra exibida, pela estrutura: texto com URL ou domínio junto à borda; se não houver, um ID
+     * com cara de barra de endereço, sempre fora do conteúdo da página.
+     */
+    private String extractToolbarDisplay(AccessibilityNodeInfo root, String packageName) {
         AccessibilityNodeInfo shown = ToolbarStructure.findUrlDisplay(root, packageName);
-        return shown == null ? null : ToolbarStructure.wholeUrl(shown.getText());
+        if (shown != null) return ToolbarStructure.wholeUrl(shown.getText());
+
+        AccessibilityNodeInfo byId = NodeSearch.findFirst(root, node ->
+                hasAddressLikeId(node)
+                        && NodeSearch.isVisibleInPackage(node, packageName)
+                        && firstUrlLikeValue(node) != null);
+        return byId == null ? null : firstUrlLikeValue(byId);
     }
 
     /**

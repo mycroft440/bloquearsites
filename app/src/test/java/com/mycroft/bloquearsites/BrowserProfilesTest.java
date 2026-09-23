@@ -7,6 +7,7 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
@@ -94,14 +95,36 @@ public class BrowserProfilesTest {
     }
 
     @Test
-    public void operaGxAndYandexKeepTheGenericReading() {
-        BrowserProfile generic = BrowserProfiles.forPackage("com.opera.gx");
+    public void yandexHasItsOwnFamily() {
+        BrowserProfile yandex = BrowserProfiles.forPackage("com.yandex.browser");
 
-        assertSame(BrowserProfiles.generic(), generic);
-        assertSame(generic, BrowserProfiles.forPackage("com.yandex.browser"));
-        assertEquals(Method.VIEW_ID, generic.getMethod());
-        assertTrue(generic.getAddressViewIds().isEmpty());
+        assertEquals("Yandex", yandex.getFamily());
+        assertEquals(Method.VIEW_ID, yandex.getMethod());
+        assertTrue(yandex.getAddressViewIds().contains("bro_omnibar_address_title_text"));
+        assertTrue(yandex.getAddressViewIds().contains("suggest_omnibox_query_edit"));
         assertFalse(BrowserProfiles.isChromium("com.yandex.browser"));
+    }
+
+    @Test
+    public void operaGxIsReadByTheToolbarStructure() {
+        BrowserProfile operaGx = BrowserProfiles.forPackage("com.opera.gx");
+
+        assertEquals(Method.TOOLBAR_STRUCTURE, operaGx.getMethod());
+        assertTrue(operaGx.getAddressViewIds().isEmpty());
+        assertNull(BrowserProfiles.familyNamed("Genérico"));
+    }
+
+    @Test
+    public void unknownBrowsersAreTestedAgainstEveryReusableFamily() {
+        List<BrowserProfile> order = BrowserProfiles.identificationOrder();
+
+        assertSame(BrowserProfiles.chromium(), order.get(0));
+        assertTrue(order.contains(BrowserProfiles.firefox()));
+        assertTrue(order.contains(BrowserProfiles.forPackage("com.yandex.browser")));
+        assertSame(BrowserProfiles.forPackage("com.opera.gx"), order.get(order.size() - 1));
+        // Via e UC são famílias de um navegador só.
+        assertFalse(order.contains(BrowserProfiles.forPackage("mark.via.gp")));
+        assertFalse(order.contains(BrowserProfiles.forPackage("com.UCMobile.intl")));
     }
 
     @Test

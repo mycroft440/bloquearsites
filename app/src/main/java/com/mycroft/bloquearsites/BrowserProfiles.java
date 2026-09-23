@@ -12,8 +12,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Famílias de navegadores. Navegadores que expõem a barra de endereço do mesmo jeito ficam no
  * mesmo perfil; uma diferença na forma de identificação pede um perfil próprio.
  *
- * Além dos pacotes listados, derivados do Chromium e do Firefox que não estão na lista entram na
- * família da base quando a barra dela é reconhecida na tela (IdentifiedBrowsers).
+ * Um navegador fora da lista é testado com o método de cada família (identificationOrder): a
+ * primeira que consegue ler a URL da barra passa a ser a família dele (IdentifiedBrowsers). Se
+ * nenhuma consegue, ele é bloqueado.
  */
 public final class BrowserProfiles {
     private BrowserProfiles() {}
@@ -111,6 +112,22 @@ public final class BrowserProfiles {
             "omnibarTextInput"
     );
 
+    // Yandex (analisado no APK 26.8): o domínio aparece no título central da barra
+    // (bro_omnibar_address_title_text/_view) ou na barra recolhida ao rolar; tocar nele abre o
+    // campo de edição suggest_omnibox_query_edit.
+    private static final BrowserProfile YANDEX = new BrowserProfile(
+            "Yandex",
+            Method.VIEW_ID,
+            new String[]{
+                    "com.yandex.browser",
+                    "com.yandex.browser.beta"
+            },
+            "bro_omnibar_address_title_text",
+            "bro_omnibar_address_title_view",
+            "bro_omnibox_collapsed_title",
+            "suggest_omnibox_query_edit"
+    );
+
     // Via: IDs ofuscados que mudam a cada versão. Por padrão a barra mostra o título da página;
     // a URL só fica visível com "Conteúdo da caixa de URL" em URL ou Domínio.
     private static final BrowserProfile VIA = new BrowserProfile(
@@ -134,17 +151,14 @@ public final class BrowserProfiles {
             }
     ).withNote("parcial: bloqueia endereços digitados; links só se a barra mostrar a URL");
 
-    // Navegadores cuja barra é lida pelo fallback genérico de IDs (url_field, omnibar, address_bar…
-    // em UrlExtractor), sem família própria. O redirecionamento usa uma aba nova. Opera GX e Yandex
-    // foram confirmados em aparelho; outros navegadores entram aqui quando identificados.
-    private static final BrowserProfile GENERIC = new BrowserProfile(
-            "Genérico",
-            Method.VIEW_ID,
-            new String[]{
-                    "com.opera.gx",
-                    "com.yandex.browser"
-            }
-    ).withNote("leitura genérica da barra; o Google abre em aba nova");
+    // Barra sem IDs próprios, lida pela estrutura da tela (texto com URL ou domínio junto à borda,
+    // fora da página). Opera GX (APK 3.3.9) desenha a barra em Compose, sem IDs; navegadores
+    // desconhecidos que só se encaixam por esse método também entram aqui.
+    private static final BrowserProfile STRUCTURAL = new BrowserProfile(
+            "Barra na tela",
+            Method.TOOLBAR_STRUCTURE,
+            new String[]{"com.opera.gx"}
+    );
 
     private static final List<BrowserProfile> PROFILES = Collections.unmodifiableList(Arrays.asList(
             CHROMIUM,
@@ -153,12 +167,27 @@ public final class BrowserProfiles {
             AOSP_BROWSER,
             OPERA,
             DUCKDUCKGO,
+            YANDEX,
             VIA,
             UC,
-            GENERIC
+            STRUCTURAL
     ));
 
-    // Derivados reconhecidos pela barra na tela. Preenchido pelo IdentifiedBrowsers.
+    // Ordem em que um navegador desconhecido é testado. Via e UC ficam de fora: são famílias de um
+    // navegador só, e o método deles já está na família Barra na tela.
+    private static final List<BrowserProfile> IDENTIFICATION_ORDER =
+            Collections.unmodifiableList(Arrays.asList(
+                    CHROMIUM,
+                    FIREFOX,
+                    SAMSUNG,
+                    AOSP_BROWSER,
+                    OPERA,
+                    DUCKDUCKGO,
+                    YANDEX,
+                    STRUCTURAL
+            ));
+
+    // Navegadores fora da lista que se encaixaram em uma família. Preenchido pelo IdentifiedBrowsers.
     private static final Map<String, BrowserProfile> IDENTIFIED = new ConcurrentHashMap<>();
 
     public static boolean isChromium(String packageName) {
@@ -208,8 +237,8 @@ public final class BrowserProfiles {
         return FIREFOX;
     }
 
-    static BrowserProfile generic() {
-        return GENERIC;
+    static List<BrowserProfile> identificationOrder() {
+        return IDENTIFICATION_ORDER;
     }
 
     static List<BrowserProfile> all() {
