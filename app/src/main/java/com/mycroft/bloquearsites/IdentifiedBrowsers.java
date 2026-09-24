@@ -15,7 +15,9 @@ import java.util.Map;
  * navegador pode mostrar um endereço que as páginas não mostram. A família que lê a URL da barra
  * sem falhar por 2 segundos (IdentificationConfirmation) passa a ser a família dele. O resultado
  * fica salvo para as próximas aberturas e para a tela do app. Se nenhuma família se encaixa, o
- * serviço bloqueia o navegador e o registra como rejeitado; ele é testado de novo a cada abertura.
+ * serviço bloqueia o navegador e o registra como rejeitado, junto com a versão instalada. Nessa
+ * versão ele é fechado assim que aparece, sem um novo teste; depois de uma atualização (do
+ * navegador ou do app), é testado de novo.
  */
 final class IdentifiedBrowsers {
     private static final String PREFS_NAME = "identified_browsers";
@@ -70,14 +72,37 @@ final class IdentifiedBrowsers {
         return CONFIRMATION.isPending(packageName);
     }
 
-    /** Registra que o navegador não se encaixou em nenhuma família e foi bloqueado. */
-    static void markRejected(Context context, String packageName) {
+    /**
+     * Registra que o navegador não se encaixou em nenhuma família e foi bloqueado, na versão
+     * instalada (VerifiedBrowsers.versionOf). Sem a versão, fica só a marca de rejeitado.
+     */
+    static void markRejected(Context context, String packageName, String version) {
         CONFIRMATION.reset(packageName);
-        rejectedPrefs(context).edit().putBoolean(packageName, true).apply();
+        SharedPreferences.Editor editor = rejectedPrefs(context).edit();
+        if (version == null) {
+            editor.putBoolean(packageName, true);
+        } else {
+            editor.putString(packageName, version);
+        }
+        editor.apply();
     }
 
+    /** Se o navegador já foi rejeitado em alguma versão. */
     static boolean isRejected(Context context, String packageName) {
-        return rejectedPrefs(context).getBoolean(packageName, false);
+        return rejectedPrefs(context).contains(packageName);
+    }
+
+    /**
+     * Se o navegador foi rejeitado na versão instalada: ele pode ser fechado assim que aparece, sem
+     * um novo teste. Registros antigos, sem a versão, não contam: o navegador é testado de novo.
+     */
+    static boolean isRejectedInVersion(Context context, String packageName, String version) {
+        if (packageName == null || version == null) return false;
+        try {
+            return version.equals(rejectedPrefs(context).getString(packageName, null));
+        } catch (ClassCastException legacyBoolean) {
+            return false;
+        }
     }
 
     private static SharedPreferences rejectedPrefs(Context context) {

@@ -190,6 +190,19 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (browserDetector == null) browserDetector = new BrowserDetector(this);
         if (profile == null && browserDetector.isBrowser(packageName)) {
+            // Recusado nesta versão: é fechado assim que aparece na tela, sem esperar uma página e
+            // sem testar as famílias de novo. Uma atualização do navegador (ou do app) o testa de
+            // novo. A janela do navegador precisa estar na tela: eventos de notificação dele não
+            // contam.
+            if (verifiedBrowsers == null) verifiedBrowsers = new VerifiedBrowsers(this);
+            if (IdentifiedBrowsers.isRejectedInVersion(
+                    this, packageName, verifiedBrowsers.versionOf(packageName))
+                    && applicationRootForPackage(packageName) != null) {
+                cancelUnsupportedBrowserCheck();
+                closeUnsupportedBrowser(packageName);
+                return;
+            }
+
             // Navegador fora da lista: é testado com o método de cada família. Encaixado, passa a
             // usar a família; se nenhuma se encaixa, é bloqueado enquanto houver sites na lista,
             // para não servir de desvio.
@@ -205,12 +218,16 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                     : applicationRootForPackage(packageName);
             profile = IdentifiedBrowsers.identify(this, urlExtractor, packageName, browserRoot);
             if (profile == null) {
-                // Já recusado antes: é fechado assim que mostra uma página, sem o novo prazo. Só
-                // ganha o prazo se uma família acabou de ler a URL e aguarda a confirmação.
+                // Recusado em outra versão (ou num registro antigo, sem versão): é fechado assim
+                // que mostra uma página, sem o novo prazo, e a recusa passa a valer para a versão
+                // instalada. Só ganha o prazo se uma família acabou de ler a URL e aguarda a
+                // confirmação.
                 if (IdentifiedBrowsers.isRejected(this, packageName)
                         && !IdentifiedBrowsers.isAwaitingConfirmation(packageName)
                         && NodeSearch.containsWebContent(browserRoot)) {
                     cancelUnsupportedBrowserCheck();
+                    IdentifiedBrowsers.markRejected(
+                            this, packageName, verifiedBrowsers.versionOf(packageName));
                     closeUnsupportedBrowser(packageName);
                     return;
                 }
@@ -434,7 +451,9 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 return;
             }
 
-            IdentifiedBrowsers.markRejected(this, packageName);
+            if (verifiedBrowsers == null) verifiedBrowsers = new VerifiedBrowsers(this);
+            IdentifiedBrowsers.markRejected(
+                    this, packageName, verifiedBrowsers.versionOf(packageName));
             closeUnsupportedBrowser(packageName);
         };
         mainHandler.postDelayed(pendingUnsupportedCheck, UNSUPPORTED_BROWSER_GRACE_MS);
