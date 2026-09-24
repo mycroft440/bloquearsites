@@ -19,9 +19,12 @@ import java.util.Set;
 
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
-    private static final long FIREFOX_RETRY_DELAY_MS = 220L;
-    private static final int FIREFOX_RETRY_ATTEMPTS = 16;
-    private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
+    // Firefox: a primeira leitura sai logo após o evento, e as seguintes em intervalos curtos. A
+    // URL só conta depois de aparecer em leituras seguidas, mas a tela já é coberta na primeira
+    // leitura de um site bloqueado, enquanto a confirmação acontece.
+    private static final long FIREFOX_RETRY_DELAY_MS = 120L;
+    private static final int FIREFOX_RETRY_ATTEMPTS = 30;
+    private static final int FIREFOX_STABLE_READS_REQUIRED = 2;
     private static final long REREAD_DELAY_MS = 250L;
     private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
     private static final long UNSUPPORTED_BROWSER_GRACE_MS = 2000L;
@@ -65,6 +68,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private long lastBlockedAt = 0L;
     private Runnable pendingFirefoxRetry;
     private String pendingFirefoxPackage;
+    // Domínio bloqueado que o Firefox mostrou e que está coberto à espera da confirmação.
+    private String firefoxCoveredHost;
     private Runnable pendingReread;
     private Runnable pendingUnsupportedCheck;
     private String pendingUnsupportedPackage;
@@ -155,7 +160,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         boolean firefox = profile != null
                 && profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR;
         boolean rereads = profile != null && profile.rereadsAfterEvent();
-        if (!firefox) cancelFirefoxRetry();
+        if (!firefox) {
+            cancelFirefoxRetry();
+            uncoverFirefox();
+        }
         if (!rereads) cancelReread();
 
         // O Firefox e as famílias que releem a barra podem sinalizar a mudança com tipos de evento
@@ -168,6 +176,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         boolean adultFilter = store.isAdultFilterEnabled();
         if (blockedSites.isEmpty() && !adultFilter) {
             cancelFirefoxRetry();
+            uncoverFirefox();
             cancelReread();
             cancelPageScan();
             return;
@@ -548,11 +557,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         cancelFirefoxRetry();
         pendingFirefoxPackage = expectedPackage;
+        // A primeira leitura não espera: o site bloqueado não pode ficar à mostra.
         scheduleFirefoxRetryAttempt(
                 expectedPackage,
                 FIREFOX_RETRY_ATTEMPTS,
                 null,
-                0
+                0,
+                0L
         );
     }
 
@@ -560,7 +571,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             String expectedPackage,
             int attemptsRemaining,
             String previousHost,
-            int stableReads
+            int stableReads,
+            long delayMs
     ) {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
@@ -572,11 +584,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
             if (root != null) {
                 if (store == null) store = new BlockedSitesStore(this);
-                if (!store.isBlockingActive()) return;
+                if (!store.isBlockingActive()) {
+                    uncoverFirefox();
+                    return;
+                }
                 Set<String> blockedSites = store.getSet();
 
                 String loadedUrl = urlExtractor.extractFirefoxDisplayedUrl(root, expectedPackage);
                 String host = DomainMatcher.extractHost(loadedUrl);
+                coverFirefoxWhileConfirming(host, loadedUrl, blockedSites);
 
                 if (host == null) {
                     nextHost = null;
@@ -603,6 +619,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             } else {
                 nextHost = null;
                 nextStableReads = 0;
+                uncoverFirefox();
                 logFirefoxRetry(attemptNumber, attemptsRemaining, null, null, 0);
             }
 
@@ -611,12 +628,52 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                         expectedPackage,
                         attemptsRemaining - 1,
                         nextHost,
-                        nextStableReads
+                        nextStableReads,
+                        FIREFOX_RETRY_DELAY_MS
                 );
+            } else {
+                uncoverFirefox();
             }
         };
 
-        mainHandler.postDelayed(pendingFirefoxRetry, FIREFOX_RETRY_DELAY_MS);
+        mainHandler.postDelayed(pendingFirefoxRetry, delayMs);
+    }
+
+    /**
+     * Firefox: cobre a tela assim que a barra mostra um site bloqueado, sem esperar as leituras
+     * que confirmam a URL. Se a leitura seguinte mostra outro domínio (ou nenhum), a cobertura
+     * sai; confirmado o site, a troca começa com a tela já coberta.
+     */
+    private void coverFirefoxWhileConfirming(String host, String url, Set<String> blockedSites) {
+        if (host == null || !blocksVisibleUrl(url, blockedSites)) {
+            uncoverFirefox();
+            return;
+        }
+
+        firefoxCoveredHost = host;
+        if (redirectController == null) {
+            redirectController = new BlockRedirectController(
+                    this, mainHandler, urlExtractor, this::scheduleReread);
+        }
+        redirectController.coverWhileConfirming();
+    }
+
+    private void uncoverFirefox() {
+        if (firefoxCoveredHost == null) return;
+        firefoxCoveredHost = null;
+        if (redirectController != null) redirectController.uncoverWhileConfirming();
+    }
+
+    /** Mesmo critério de handleVisibleUrl, sem bloquear: a URL seria bloqueada? */
+    private boolean blocksVisibleUrl(String visibleUrl, Set<String> blockedSites) {
+        if (visibleUrl == null) return false;
+        if (redirectController != null && redirectController.isRedirectDestination(visibleUrl)) {
+            return false;
+        }
+        if (DomainMatcher.findMatchedDomain(visibleUrl, blockedSites) != null) return true;
+        return store != null
+                && store.isAdultFilterEnabled()
+                && AdultContentFilter.blocksUrl(visibleUrl);
     }
 
     private void cancelFirefoxRetry() {
@@ -734,7 +791,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         String host = DomainMatcher.extractHost(url);
         boolean stable = host != null && host.equals(lastMonitoredFirefoxHost);
         lastMonitoredFirefoxHost = host;
-        if (stable) handleVisibleUrl(packageName, url, store.getSet());
+        Set<String> blockedSites = store.getSet();
+        if (stable) {
+            handleVisibleUrl(packageName, url, blockedSites);
+        } else if (blocksVisibleUrl(url, blockedSites)) {
+            // Um site bloqueado apareceu sem evento: a confirmação rápida cobre a tela na hora, em
+            // vez de esperar o próximo ciclo da observação.
+            scheduleFirefoxRetry(packageName);
+        }
     }
 
     private void cancelMonitoring() {
@@ -855,6 +919,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private void blockCurrentPage(String packageName) {
         cancelFirefoxRetry();
         cancelReread();
+        // A cortina que cobria o Firefox continua na tela e passa a ser a da troca.
+        firefoxCoveredHost = null;
 
         if (redirectController == null) {
             redirectController = new BlockRedirectController(
@@ -866,6 +932,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     @Override
     public void onInterrupt() {
         cancelFirefoxRetry();
+        uncoverFirefox();
         cancelReread();
         cancelUnsupportedBrowserCheck();
         cancelAddressBarCheck();

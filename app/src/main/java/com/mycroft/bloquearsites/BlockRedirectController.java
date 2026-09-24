@@ -47,6 +47,9 @@ final class BlockRedirectController {
     // confirmado.
     private static final long CURTAIN_PRESENT_MS = 50L;
     private static final long CURTAIN_DRAW_TIMEOUT_MS = 400L;
+    // Firefox: a cortina cobre o site bloqueado enquanto a URL é confirmada; se a confirmação não
+    // vier nesse prazo, ela sai sozinha.
+    private static final long CONFIRM_COVER_MAX_MS = 1500L;
 
     private final AccessibilityService service;
     private final Handler mainHandler;
@@ -81,6 +84,7 @@ final class BlockRedirectController {
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
     private final Runnable curtainTimeoutRunnable = this::expireBlockCurtain;
     private final Runnable retryAddressBarRunnable = this::retryAddressBarNavigation;
+    private final Runnable uncoverRunnable = this::uncoverWhileConfirming;
 
     BlockRedirectController(
             AccessibilityService service,
@@ -125,6 +129,7 @@ final class BlockRedirectController {
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         mainHandler.removeCallbacks(retryAddressBarRunnable);
+        mainHandler.removeCallbacks(uncoverRunnable);
         addressBarNavigator.cancel();
         redirectPackage = packageName;
         redirectFailed = false;
@@ -155,6 +160,30 @@ final class BlockRedirectController {
             navigationPending = false;
             beginRedirect();
         });
+    }
+
+    /**
+     * Firefox: cobre a tela assim que a barra mostra um site bloqueado, antes de a URL ser
+     * confirmada. Se a troca começar (start), a cortina já está na tela e a troca não espera o
+     * desenho dela. Chamadas seguidas renovam o prazo.
+     */
+    void coverWhileConfirming() {
+        if (redirectPackage != null) return;
+
+        mainHandler.removeCallbacks(uncoverRunnable);
+        curtainVisibleUntil = SystemClock.elapsedRealtime() + CONFIRM_COVER_MAX_MS;
+        if (curtainPassThrough) setCurtainPassThrough(false);
+        showBlockCurtain();
+        mainHandler.postDelayed(uncoverRunnable, CONFIRM_COVER_MAX_MS);
+    }
+
+    /** Retira a cobertura de coverWhileConfirming, se a troca não começou. */
+    void uncoverWhileConfirming() {
+        mainHandler.removeCallbacks(uncoverRunnable);
+        if (redirectPackage != null) return;
+
+        curtainVisibleUntil = 0L;
+        hideBlockCurtain();
     }
 
     /**
@@ -237,6 +266,7 @@ final class BlockRedirectController {
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         mainHandler.removeCallbacks(retryAddressBarRunnable);
+        mainHandler.removeCallbacks(uncoverRunnable);
         redirectPackage = null;
         curtainVisibleUntil = 0L;
         hideBlockCurtain();
@@ -506,8 +536,10 @@ final class BlockRedirectController {
     private void updateRetryButton() {
         if (retryRedirectButton == null) return;
 
-        boolean canRetry = redirectFailed
-                || SystemClock.elapsedRealtime() - lastRedirectAt >= SHOW_RETRY_DELAY_MS;
+        // Sem troca em andamento (cobertura do Firefox), não há o que tentar de novo.
+        boolean canRetry = redirectPackage != null
+                && (redirectFailed
+                        || SystemClock.elapsedRealtime() - lastRedirectAt >= SHOW_RETRY_DELAY_MS);
         retryRedirectButton.setVisibility(canRetry ? View.VISIBLE : View.GONE);
     }
 
