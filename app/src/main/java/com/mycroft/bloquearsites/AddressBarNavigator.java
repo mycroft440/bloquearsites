@@ -38,6 +38,11 @@ import java.util.List;
  * Enter de acessibilidade envia o imeActionId do campo, que é 0, e é ignorado. Por isso a
  * confirmação usa a conexão de entrada do serviço (Android 13+); sem ela, a troca pela barra nem
  * começa e o Google abre em uma aba nova.
+ *
+ * No Opera GX, o texto trocado por ACTION_SET_TEXT às vezes não fica no campo em Compose, e a tela
+ * de pesquisa continuava com o site bloqueado selecionado. No Android 13+, o destino é digitado
+ * pela conexão de entrada do serviço, como um teclado: seleciona tudo e escreve por cima. A
+ * checagem do campo também é mais frequente, para a troca não esperar prazos fixos.
  */
 final class AddressBarNavigator {
     interface Callback {
@@ -55,6 +60,11 @@ final class AddressBarNavigator {
     private static final long RETRY_DELAY_MS = 250L;
     private static final int SEARCH_SCREEN_FIND_ATTEMPTS = 5;
     private static final long SUBMIT_DELAY_MS = 300L;
+    // Opera GX com a conexão de entrada: o campo é procurado a cada 120 ms (até ~1,8 s), até a
+    // tela de pesquisa abrir e o teclado se conectar a ele.
+    private static final long INPUT_POLL_MS = 120L;
+    private static final int INPUT_POLL_ATTEMPTS = 15;
+    private static final long INPUT_SUBMIT_DELAY_MS = 150L;
     private static final long TAP_DURATION_MS = 50L;
     private static final String LOG_TAG = "BloquearSitesRedirect";
 
@@ -69,6 +79,7 @@ final class AddressBarNavigator {
     private boolean touchedBar;
     private boolean searchScreen;
     private boolean editorActionSubmit;
+    private boolean inputConnectionTyping;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -95,6 +106,7 @@ final class AddressBarNavigator {
         this.touchedBar = false;
         this.searchScreen = opensSearchScreen(browserProfile);
         this.editorActionSubmit = false;
+        this.inputConnectionTyping = searchScreen && canSendEditorAction();
 
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
@@ -135,7 +147,7 @@ final class AddressBarNavigator {
         }
 
         touchedBar = true;
-        schedule(() -> typeUrl(1), FOCUS_DELAY_MS);
+        schedule(() -> typeUrl(1), inputConnectionTyping ? INPUT_POLL_MS : FOCUS_DELAY_MS);
         return true;
     }
 
@@ -173,27 +185,46 @@ final class AddressBarNavigator {
 
     private void typeUrl(int attempt) {
         AccessibilityNodeInfo editField = findEditField(browserRoot());
-        if (editField == null) {
-            if (searchScreen && attempt < SEARCH_SCREEN_FIND_ATTEMPTS) {
-                schedule(() -> typeUrl(attempt + 1), RETRY_DELAY_MS);
-            } else {
+        // Pelo teclado do serviço, só com o campo de endereço em foco: a conexão de entrada vai
+        // para o campo com foco, que pode ser um da página enquanto a tela de pesquisa abre.
+        boolean ready = editField != null
+                && (!inputConnectionTyping
+                        || (editField.isFocused() && browserInputConnection() != null));
+        if (!ready) {
+            int attempts = inputConnectionTyping
+                    ? INPUT_POLL_ATTEMPTS
+                    : SEARCH_SCREEN_FIND_ATTEMPTS;
+            if (searchScreen && attempt < attempts) {
+                schedule(
+                        () -> typeUrl(attempt + 1),
+                        inputConnectionTyping ? INPUT_POLL_MS : RETRY_DELAY_MS
+                );
+                return;
+            }
+            if (editField == null) {
                 log("campo de edição não encontrado após " + attempt + " tentativas");
                 finish(false);
+                return;
             }
-            return;
+            // O teclado do serviço não se conectou ao campo: digita pela acessibilidade.
+            inputConnectionTyping = false;
         }
 
         // Sem foco, o Chrome ignora o texto no autocomplete e o Enter não navegaria.
         if (!editField.isFocused()) editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
 
-        boolean typed = setText(editField);
-        log("campo " + describe(editField) + " setText=" + typed);
+        boolean typed = inputConnectionTyping ? typeWithInputConnection() : setText(editField);
+        log("campo " + describe(editField)
+                + (inputConnectionTyping ? " teclado=" : " setText=") + typed);
         if (!typed) {
             finish(false);
             return;
         }
 
-        schedule(() -> submit(false), SUBMIT_DELAY_MS);
+        schedule(
+                () -> submit(false),
+                inputConnectionTyping ? INPUT_SUBMIT_DELAY_MS : SUBMIT_DELAY_MS
+        );
     }
 
     private void submit(boolean retyped) {
@@ -223,6 +254,9 @@ final class AddressBarNavigator {
         if (editorActionSubmit) {
             submitted = focused && sendEditorAction();
             log("ação Ir=" + submitted);
+        } else if (inputConnectionTyping && focused && sendEditorAction()) {
+            submitted = true;
+            log("ação do teclado do serviço");
         } else {
             submitted = focused
                     && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -245,22 +279,41 @@ final class AddressBarNavigator {
     private boolean sendEditorAction() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
 
-        InputMethod inputMethod = service.getInputMethod();
-        if (inputMethod == null || !inputMethod.getCurrentInputStarted()) return false;
-
-        EditorInfo editor = inputMethod.getCurrentInputEditorInfo();
-        if (editor == null || !packageName.equals(editor.packageName)) return false;
-
-        InputMethod.AccessibilityInputConnection connection =
-                inputMethod.getCurrentInputConnection();
+        InputMethod.AccessibilityInputConnection connection = browserInputConnection();
         if (connection == null) return false;
 
+        EditorInfo editor = service.getInputMethod().getCurrentInputEditorInfo();
         int action = editor.imeOptions & EditorInfo.IME_MASK_ACTION;
         if (action == EditorInfo.IME_ACTION_UNSPECIFIED || action == EditorInfo.IME_ACTION_NONE) {
             action = EditorInfo.IME_ACTION_GO;
         }
         connection.performEditorAction(action);
         return true;
+    }
+
+    /** Seleciona o texto do campo e escreve o destino por cima, como um teclado. */
+    private boolean typeWithInputConnection() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+
+        InputMethod.AccessibilityInputConnection connection = browserInputConnection();
+        if (connection == null) return false;
+
+        connection.performContextMenuAction(android.R.id.selectAll);
+        connection.commitText(url, 1, null);
+        return true;
+    }
+
+    /** Conexão de entrada do serviço com o campo ativo, se ele é do navegador (Android 13+). */
+    private InputMethod.AccessibilityInputConnection browserInputConnection() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null;
+
+        InputMethod inputMethod = service.getInputMethod();
+        if (inputMethod == null || !inputMethod.getCurrentInputStarted()) return null;
+
+        EditorInfo editor = inputMethod.getCurrentInputEditorInfo();
+        if (editor == null || !packageName.equals(editor.packageName)) return null;
+
+        return inputMethod.getCurrentInputConnection();
     }
 
     private boolean setText(AccessibilityNodeInfo editField) {

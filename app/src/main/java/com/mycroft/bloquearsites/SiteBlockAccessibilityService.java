@@ -81,7 +81,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         browserDetector = new BrowserDetector(this);
         verifiedBrowsers = new VerifiedBrowsers(this);
         IdentifiedBrowsers.load(this);
-        redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
+        redirectController = new BlockRedirectController(
+                this, mainHandler, urlExtractor, this::scheduleReread);
 
         AccessibilityServiceInfo info = getServiceInfo();
         if (info != null) {
@@ -729,7 +730,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelReread();
 
         if (redirectController == null) {
-            redirectController = new BlockRedirectController(this, mainHandler, urlExtractor);
+            redirectController = new BlockRedirectController(
+                this, mainHandler, urlExtractor, this::scheduleReread);
         }
         redirectController.start(packageName);
     }

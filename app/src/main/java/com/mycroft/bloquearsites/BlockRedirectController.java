@@ -20,6 +20,11 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class BlockRedirectController {
+    interface Listener {
+        /** A troca desistiu com o site talvez ainda na tela: ele deve ser conferido de novo. */
+        void onRedirectReleased(String packageName);
+    }
+
     private static final String REDIRECT_URL = "https://google.com";
     private static final String REDIRECT_HOST = "google.com";
     private static final String LOG_TAG = "BloquearSitesRedirect";
@@ -30,11 +35,18 @@ final class BlockRedirectController {
     private static final long CURTAIN_MAX_VISIBLE_MS = 3000L;
     // Opera GX e Mi Browser: tempo para o Google aparecer depois da troca pela barra ou da aba nova.
     private static final long REDIRECT_TIMEOUT_MS = 5000L;
+    // Opera GX: a tela de pesquisa demora a abrir e não pode ficar à mostra, então a cortina fica
+    // até a troca terminar (com um limite). Se a tela for fechada no meio da troca (Voltar), a
+    // troca pela barra é tentada de novo antes da aba nova.
+    private static final long SEARCH_SCREEN_CURTAIN_MS = 12000L;
+    private static final int SEARCH_SCREEN_BAR_ATTEMPTS = 3;
+    private static final long SEARCH_SCREEN_RETRY_DELAY_MS = 400L;
 
     private final AccessibilityService service;
     private final Handler mainHandler;
     private final UrlExtractor urlExtractor;
     private final AddressBarNavigator addressBarNavigator;
+    private final Listener listener;
 
     private WindowManager windowManager;
     private LinearLayout blockCurtain;
@@ -51,18 +63,25 @@ final class BlockRedirectController {
     // própria; os cuidados com essa tela (fechá-la numa falha, esperar que ela feche e o limite de
     // tempo) valem só para eles.
     private boolean searchScreenBrowser;
+    // Família que sempre edita o endereço numa tela de pesquisa (Opera GX): cortina longa, novas
+    // tentativas pela barra e nova conferência do site quando a troca desiste.
+    private boolean searchScreenFamily;
+    private int barAttempts;
 
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
     private final Runnable curtainTimeoutRunnable = this::expireBlockCurtain;
+    private final Runnable retryAddressBarRunnable = this::retryAddressBarNavigation;
 
     BlockRedirectController(
             AccessibilityService service,
             Handler mainHandler,
-            UrlExtractor urlExtractor
+            UrlExtractor urlExtractor,
+            Listener listener
     ) {
         this.service = service;
         this.mainHandler = mainHandler;
         this.urlExtractor = urlExtractor;
+        this.listener = listener;
         this.addressBarNavigator = new AddressBarNavigator(service, mainHandler);
         this.windowManager = (WindowManager) service.getSystemService(AccessibilityService.WINDOW_SERVICE);
     }
@@ -95,14 +114,18 @@ final class BlockRedirectController {
 
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        mainHandler.removeCallbacks(retryAddressBarRunnable);
         addressBarNavigator.cancel();
         redirectPackage = packageName;
         redirectFailed = false;
         newTabFallbackUsed = false;
         searchScreenBrowser = AddressBarNavigator.opensSearchScreen(
                 BrowserProfiles.forPackage(packageName));
+        searchScreenFamily = searchScreenBrowser;
+        barAttempts = 1;
+        long curtainMs = searchScreenFamily ? SEARCH_SCREEN_CURTAIN_MS : CURTAIN_MAX_VISIBLE_MS;
         lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
-        curtainVisibleUntil = SystemClock.elapsedRealtime() + CURTAIN_MAX_VISIBLE_MS;
+        curtainVisibleUntil = SystemClock.elapsedRealtime() + curtainMs;
         redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
 
         // Enquanto a barra é preenchida a cortina deixa toques passarem: no Firefox a edição só
@@ -110,16 +133,11 @@ final class BlockRedirectController {
         // para não disputar com o toque a atualização da janela.
         setCurtainPassThrough(true);
         showBlockCurtain();
-        mainHandler.postDelayed(curtainTimeoutRunnable, CURTAIN_MAX_VISIBLE_MS);
+        mainHandler.postDelayed(curtainTimeoutRunnable, curtainMs);
 
         // O Google é aberto na própria aba do site bloqueado, pela barra de endereço. A checagem
         // do destino só começa quando a barra terminar de ser preenchida.
-        if (addressBarNavigator.start(
-                packageName,
-                REDIRECT_URL,
-                this::onAddressBarNavigationFinished)) {
-            // O Mi Browser só abre a tela de pesquisa no novo estilo de página, pela barra de baixo.
-            searchScreenBrowser = addressBarNavigator.isUsingSearchScreen();
+        if (startAddressBarNavigation()) {
             lastRedirectAt = SystemClock.elapsedRealtime();
             updateRetryButton();
             return;
@@ -130,10 +148,39 @@ final class BlockRedirectController {
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
     }
 
+    private boolean startAddressBarNavigation() {
+        setCurtainPassThrough(true);
+        if (!addressBarNavigator.start(
+                redirectPackage,
+                REDIRECT_URL,
+                this::onAddressBarNavigationFinished)) {
+            return false;
+        }
+
+        // O Mi Browser só abre a tela de pesquisa no novo estilo de página, pela barra de baixo.
+        searchScreenBrowser = addressBarNavigator.isUsingSearchScreen();
+        return true;
+    }
+
+    /** Opera GX: nova troca pela barra depois que a tela de pesquisa foi fechada no meio. */
+    private void retryAddressBarNavigation() {
+        if (redirectPackage == null) return;
+
+        redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
+        showBlockCurtain();
+        if (startAddressBarNavigation()) return;
+
+        setCurtainPassThrough(false);
+        lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
+        openGoogleInNewTab();
+        mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
+    }
+
     void destroy() {
         addressBarNavigator.cancel();
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        mainHandler.removeCallbacks(retryAddressBarRunnable);
         redirectPackage = null;
         curtainVisibleUntil = 0L;
         hideBlockCurtain();
@@ -158,6 +205,16 @@ final class BlockRedirectController {
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
     }
 
+    /**
+     * Fecha a tela de pesquisa só se ela ainda está aberta: com ela já fechada (o usuário apertou
+     * Voltar), um novo Voltar sairia da página ou do navegador.
+     */
+    private void closeAddressEditorIfOpen() {
+        AccessibilityNodeInfo root = foregroundApplicationRoot();
+        if (redirectPackage == null || !redirectPackage.equals(packageNameOf(root))) return;
+        if (isEditingAddress(root, redirectPackage)) closeAddressEditor();
+    }
+
     private void escapeFirefoxBlockedPage() {
         boolean wentBack = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
         if (!wentBack) {
@@ -174,7 +231,16 @@ final class BlockRedirectController {
         } else {
             // Se a barra não pôde ser usada, cai no comportamento antigo: Google em uma aba nova.
             // Com uma tela de pesquisa (Opera GX e Mi Browser), antes fecha a que ficou aberta.
-            if (touchedBar && searchScreenBrowser) closeAddressEditor();
+            if (touchedBar && searchScreenBrowser) closeAddressEditorIfOpen();
+
+            // Opera GX: a tela de pesquisa pode ter sido fechada no meio da troca (Voltar); a
+            // troca pela barra é tentada de novo antes da aba nova.
+            if (searchScreenFamily && barAttempts < SEARCH_SCREEN_BAR_ATTEMPTS) {
+                barAttempts++;
+                mainHandler.postDelayed(retryAddressBarRunnable, SEARCH_SCREEN_RETRY_DELAY_MS);
+                return;
+            }
+
             lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
             openGoogleInNewTab();
         }
@@ -249,7 +315,7 @@ final class BlockRedirectController {
     private void handleRedirectTimeout(boolean browserInFront) {
         if (browserInFront && !newTabFallbackUsed) {
             Log.w(LOG_TAG, "Google não apareceu após a troca pela barra; abrindo aba nova.");
-            closeAddressEditor();
+            closeAddressEditorIfOpen();
             lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
             openGoogleInNewTab();
             mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
@@ -257,11 +323,16 @@ final class BlockRedirectController {
         }
 
         Log.w(LOG_TAG, "Google não apareceu; liberando a detecção.");
+        String releasedPackage = redirectPackage;
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         redirectPackage = null;
         redirectFailed = false;
         curtainVisibleUntil = 0L;
         hideBlockCurtain();
+
+        // Opera GX: se o site bloqueado continua na tela, ele é bloqueado de novo sem esperar um
+        // novo evento do navegador.
+        if (searchScreenFamily && listener != null) listener.onRedirectReleased(releasedPackage);
     }
 
     private boolean isEditingAddress(AccessibilityNodeInfo root, String packageName) {
@@ -400,6 +471,7 @@ final class BlockRedirectController {
     private void finishRedirect() {
         addressBarNavigator.cancel();
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
+        mainHandler.removeCallbacks(retryAddressBarRunnable);
         redirectPackage = null;
         curtainVisibleUntil = 0L;
         hideBlockCurtain();
