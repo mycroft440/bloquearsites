@@ -12,6 +12,7 @@ import android.provider.Browser;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -41,6 +42,11 @@ final class BlockRedirectController {
     private static final long SEARCH_SCREEN_CURTAIN_MS = 12000L;
     private static final int SEARCH_SCREEN_BAR_ATTEMPTS = 3;
     private static final long SEARCH_SCREEN_RETRY_DELAY_MS = 400L;
+    // Primeiro a cortina, depois a troca: a troca começa quando o primeiro quadro da cortina é
+    // desenhado (mais o tempo de ele chegar à tela), ou após o prazo máximo, se o desenho não for
+    // confirmado.
+    private static final long CURTAIN_PRESENT_MS = 50L;
+    private static final long CURTAIN_DRAW_TIMEOUT_MS = 400L;
 
     private final AccessibilityService service;
     private final Handler mainHandler;
@@ -67,6 +73,10 @@ final class BlockRedirectController {
     // tentativas pela barra e nova conferência do site quando a troca desiste.
     private boolean searchScreenFamily;
     private int barAttempts;
+    // Troca pela barra agendada (esperando a cortina ou uma nova tentativa): a checagem do
+    // destino espera, como com a barra em preenchimento.
+    private boolean navigationPending;
+    private int redirectGeneration;
 
     private final Runnable redirectCheckRunnable = this::checkRedirectDestination;
     private final Runnable curtainTimeoutRunnable = this::expireBlockCurtain;
@@ -131,12 +141,27 @@ final class BlockRedirectController {
         // Enquanto a barra é preenchida a cortina deixa toques passarem: no Firefox a edição só
         // abre com um toque simulado, que a cortina interceptaria. Uma cortina nova já nasce assim,
         // para não disputar com o toque a atualização da janela.
+        boolean curtainAlreadyShown = blockCurtain != null;
         setCurtainPassThrough(true);
         showBlockCurtain();
         mainHandler.postDelayed(curtainTimeoutRunnable, curtainMs);
 
-        // O Google é aberto na própria aba do site bloqueado, pela barra de endereço. A checagem
-        // do destino só começa quando a barra terminar de ser preenchida.
+        // Primeiro a cortina, depois a troca: o toque na barra (e a tela de pesquisa do Opera GX)
+        // não pode aparecer antes de a cortina estar na tela.
+        int generation = ++redirectGeneration;
+        navigationPending = true;
+        whenCurtainDrawn(curtainAlreadyShown, () -> {
+            if (generation != redirectGeneration || !packageName.equals(redirectPackage)) return;
+            navigationPending = false;
+            beginRedirect();
+        });
+    }
+
+    /**
+     * O Google é aberto na própria aba do site bloqueado, pela barra de endereço. A checagem do
+     * destino só começa quando a barra terminar de ser preenchida.
+     */
+    private void beginRedirect() {
         if (startAddressBarNavigation()) {
             lastRedirectAt = SystemClock.elapsedRealtime();
             updateRetryButton();
@@ -146,6 +171,34 @@ final class BlockRedirectController {
         setCurtainPassThrough(false);
         openGoogleInNewTab();
         mainHandler.postDelayed(redirectCheckRunnable, REDIRECT_CHECK_DELAY_MS);
+    }
+
+    /** Roda a ação quando a cortina estiver na tela (ou após um prazo máximo). */
+    private void whenCurtainDrawn(boolean alreadyShown, Runnable action) {
+        LinearLayout curtain = blockCurtain;
+        if (alreadyShown || curtain == null) {
+            action.run();
+            return;
+        }
+
+        boolean[] done = {false};
+        Runnable once = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            action.run();
+        };
+        ViewTreeObserver.OnDrawListener[] listener = new ViewTreeObserver.OnDrawListener[1];
+        // O listener não pode ser removido dentro do próprio onDraw.
+        listener[0] = () -> mainHandler.post(() -> {
+            try {
+                curtain.getViewTreeObserver().removeOnDrawListener(listener[0]);
+            } catch (RuntimeException ignored) {
+                // A cortina pode ter sido removida nesse meio tempo.
+            }
+            mainHandler.postDelayed(once, CURTAIN_PRESENT_MS);
+        });
+        curtain.getViewTreeObserver().addOnDrawListener(listener[0]);
+        mainHandler.postDelayed(once, CURTAIN_DRAW_TIMEOUT_MS);
     }
 
     private boolean startAddressBarNavigation() {
@@ -164,6 +217,7 @@ final class BlockRedirectController {
 
     /** Opera GX: nova troca pela barra depois que a tela de pesquisa foi fechada no meio. */
     private void retryAddressBarNavigation() {
+        navigationPending = false;
         if (redirectPackage == null) return;
 
         redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
@@ -177,6 +231,8 @@ final class BlockRedirectController {
     }
 
     void destroy() {
+        navigationPending = false;
+        redirectGeneration++;
         addressBarNavigator.cancel();
         mainHandler.removeCallbacks(redirectCheckRunnable);
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
@@ -237,6 +293,7 @@ final class BlockRedirectController {
             // troca pela barra é tentada de novo antes da aba nova.
             if (searchScreenFamily && barAttempts < SEARCH_SCREEN_BAR_ATTEMPTS) {
                 barAttempts++;
+                navigationPending = true;
                 mainHandler.postDelayed(retryAddressBarRunnable, SEARCH_SCREEN_RETRY_DELAY_MS);
                 return;
             }
@@ -277,7 +334,7 @@ final class BlockRedirectController {
         if (redirectPackage == null) return;
 
         // Enquanto a barra é preenchida, ela já mostra google.com sem a navegação ter ocorrido.
-        if (addressBarNavigator.isRunning()) return;
+        if (addressBarNavigator.isRunning() || navigationPending) return;
 
         AccessibilityNodeInfo root = foregroundApplicationRoot();
         String packageName = packageNameOf(root);
@@ -405,8 +462,8 @@ final class BlockRedirectController {
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    // Sem foco, a cortina fica acima do teclado e o cobre também.
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                            | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
                             | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                     PixelFormat.OPAQUE
             );
@@ -469,6 +526,8 @@ final class BlockRedirectController {
     }
 
     private void finishRedirect() {
+        navigationPending = false;
+        redirectGeneration++;
         addressBarNavigator.cancel();
         mainHandler.removeCallbacks(curtainTimeoutRunnable);
         mainHandler.removeCallbacks(retryAddressBarRunnable);

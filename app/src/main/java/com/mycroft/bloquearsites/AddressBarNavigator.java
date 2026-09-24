@@ -9,10 +9,12 @@ import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.SurroundingText;
 
 import java.util.List;
 
@@ -41,8 +43,11 @@ import java.util.List;
  *
  * No Opera GX, o texto trocado por ACTION_SET_TEXT às vezes não fica no campo em Compose, e a tela
  * de pesquisa continuava com o site bloqueado selecionado. No Android 13+, o destino é digitado
- * pela conexão de entrada do serviço, como um teclado: seleciona tudo e escreve por cima. A
- * checagem do campo também é mais frequente, para a troca não esperar prazos fixos.
+ * pela conexão de entrada do serviço, como um teclado: seleciona tudo e escreve por cima. A espera
+ * pela tela de pesquisa e a conferência do texto também passam pelo teclado do serviço
+ * (ServiceInputMethod), sem percorrer a árvore de acessibilidade: o Opera GX não tem IDs na
+ * barra, e cada busca pela estrutura da tela ocupava o serviço por muito tempo, atrasando a
+ * cortina e a troca.
  */
 final class AddressBarNavigator {
     interface Callback {
@@ -60,11 +65,12 @@ final class AddressBarNavigator {
     private static final long RETRY_DELAY_MS = 250L;
     private static final int SEARCH_SCREEN_FIND_ATTEMPTS = 5;
     private static final long SUBMIT_DELAY_MS = 300L;
-    // Opera GX com a conexão de entrada: o campo é procurado a cada 120 ms (até ~1,8 s), até a
-    // tela de pesquisa abrir e o teclado se conectar a ele.
-    private static final long INPUT_POLL_MS = 120L;
-    private static final int INPUT_POLL_ATTEMPTS = 15;
-    private static final long INPUT_SUBMIT_DELAY_MS = 150L;
+    // Opera GX com o teclado do serviço: a conexão com o campo é conferida a cada 80 ms (até 2 s),
+    // até a tela de pesquisa abrir; a conferência não percorre a árvore.
+    private static final long INPUT_POLL_MS = 80L;
+    private static final int INPUT_POLL_ATTEMPTS = 25;
+    private static final long INPUT_SUBMIT_DELAY_MS = 120L;
+    private static final int INPUT_TEXT_LIMIT = 500;
     private static final long TAP_DURATION_MS = 50L;
     private static final String LOG_TAG = "BloquearSitesRedirect";
 
@@ -80,6 +86,7 @@ final class AddressBarNavigator {
     private boolean searchScreen;
     private boolean editorActionSubmit;
     private boolean inputConnectionTyping;
+    private long barTouchedAt;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -110,6 +117,8 @@ final class AddressBarNavigator {
 
         AccessibilityNodeInfo root = browserRoot();
         if (root == null) return false;
+
+        barTouchedAt = SystemClock.elapsedRealtime();
 
         // Chrome, Samsung, Mi Browser, Opera e DuckDuckGo exibem a URL no próprio campo editável.
         AccessibilityNodeInfo editField = findEditField(root);
@@ -184,47 +193,86 @@ final class AddressBarNavigator {
     }
 
     private void typeUrl(int attempt) {
+        if (inputConnectionTyping) {
+            typeWithServiceKeyboard(attempt);
+            return;
+        }
+
         AccessibilityNodeInfo editField = findEditField(browserRoot());
-        // Pelo teclado do serviço, só com o campo de endereço em foco: a conexão de entrada vai
-        // para o campo com foco, que pode ser um da página enquanto a tela de pesquisa abre.
-        boolean ready = editField != null
-                && (!inputConnectionTyping
-                        || (editField.isFocused() && browserInputConnection() != null));
-        if (!ready) {
-            int attempts = inputConnectionTyping
-                    ? INPUT_POLL_ATTEMPTS
-                    : SEARCH_SCREEN_FIND_ATTEMPTS;
-            if (searchScreen && attempt < attempts) {
-                schedule(
-                        () -> typeUrl(attempt + 1),
-                        inputConnectionTyping ? INPUT_POLL_MS : RETRY_DELAY_MS
-                );
-                return;
-            }
-            if (editField == null) {
+        if (editField == null) {
+            if (searchScreen && attempt < SEARCH_SCREEN_FIND_ATTEMPTS) {
+                schedule(() -> typeUrl(attempt + 1), RETRY_DELAY_MS);
+            } else {
                 log("campo de edição não encontrado após " + attempt + " tentativas");
                 finish(false);
-                return;
             }
-            // O teclado do serviço não se conectou ao campo: digita pela acessibilidade.
-            inputConnectionTyping = false;
+            return;
         }
 
         // Sem foco, o Chrome ignora o texto no autocomplete e o Enter não navegaria.
         if (!editField.isFocused()) editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
 
-        boolean typed = inputConnectionTyping ? typeWithInputConnection() : setText(editField);
-        log("campo " + describe(editField)
-                + (inputConnectionTyping ? " teclado=" : " setText=") + typed);
+        boolean typed = setText(editField);
+        log("campo " + describe(editField) + " setText=" + typed);
         if (!typed) {
             finish(false);
             return;
         }
 
-        schedule(
-                () -> submit(false),
-                inputConnectionTyping ? INPUT_SUBMIT_DELAY_MS : SUBMIT_DELAY_MS
-        );
+        schedule(() -> submit(false), SUBMIT_DELAY_MS);
+    }
+
+    /**
+     * Opera GX (Android 13+): espera um campo do navegador se conectar ao teclado do serviço depois
+     * do toque na barra (a tela de pesquisa abriu) e digita o destino por ele. Se o teclado não se
+     * conectar, digita pela acessibilidade.
+     */
+    private void typeWithServiceKeyboard(int attempt) {
+        boolean connected = ServiceInputMethod.startedSince(packageName, barTouchedAt)
+                && browserInputConnection() != null;
+        if (!connected) {
+            if (attempt < INPUT_POLL_ATTEMPTS) {
+                schedule(() -> typeWithServiceKeyboard(attempt + 1), INPUT_POLL_MS);
+                return;
+            }
+            log("teclado do serviço não se conectou; digitando pela acessibilidade");
+            inputConnectionTyping = false;
+            typeUrl(1);
+            return;
+        }
+
+        if (!typeWithInputConnection()) {
+            inputConnectionTyping = false;
+            typeUrl(1);
+            return;
+        }
+        log("destino digitado pelo teclado do serviço");
+        schedule(() -> submitWithServiceKeyboard(false), INPUT_SUBMIT_DELAY_MS);
+    }
+
+    private void submitWithServiceKeyboard(boolean retyped) {
+        if (browserInputConnection() == null) {
+            // A tela de pesquisa fechou (Voltar) antes da confirmação.
+            log("campo fechado antes da confirmação");
+            finish(false);
+            return;
+        }
+
+        if (!inputHasTypedUrl()) {
+            if (!retyped && typeWithInputConnection()) {
+                log("texto não ficou no campo; digitando de novo pelo teclado do serviço");
+                schedule(() -> submitWithServiceKeyboard(true), INPUT_SUBMIT_DELAY_MS);
+                return;
+            }
+            log("texto não ficou no campo; digitando pela acessibilidade");
+            inputConnectionTyping = false;
+            typeUrl(1);
+            return;
+        }
+
+        boolean submitted = sendEditorAction();
+        log("ação do teclado do serviço=" + submitted);
+        finish(submitted);
     }
 
     private void submit(boolean retyped) {
@@ -254,9 +302,6 @@ final class AddressBarNavigator {
         if (editorActionSubmit) {
             submitted = focused && sendEditorAction();
             log("ação Ir=" + submitted);
-        } else if (inputConnectionTyping && focused && sendEditorAction()) {
-            submitted = true;
-            log("ação do teclado do serviço");
         } else {
             submitted = focused
                     && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -301,6 +346,20 @@ final class AddressBarNavigator {
         connection.performContextMenuAction(android.R.id.selectAll);
         connection.commitText(url, 1, null);
         return true;
+    }
+
+    /** Se o campo conectado ao teclado do serviço já tem o destino digitado. */
+    private boolean inputHasTypedUrl() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false;
+
+        InputMethod.AccessibilityInputConnection connection = browserInputConnection();
+        if (connection == null) return false;
+
+        SurroundingText around =
+                connection.getSurroundingText(INPUT_TEXT_LIMIT, INPUT_TEXT_LIMIT, 0);
+        CharSequence text = around == null ? null : around.getText();
+        String typedHost = DomainMatcher.extractHost(text == null ? null : text.toString().trim());
+        return typedHost != null && typedHost.equals(DomainMatcher.extractHost(url));
     }
 
     /** Conexão de entrada do serviço com o campo ativo, se ele é do navegador (Android 13+). */

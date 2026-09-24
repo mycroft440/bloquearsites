@@ -2,6 +2,8 @@ package com.mycroft.bloquearsites;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.InputMethod;
+import android.annotation.TargetApi;
 import android.content.pm.ApplicationInfo;
 import android.os.Build;
 import android.os.Handler;
@@ -36,6 +38,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long PAGE_SCAN_DELAY_MS = 700L;
     private static final long SEARCH_PAGE_RESCAN_MS = 1500L;
     private static final long PAGE_RESCAN_MS = 5000L;
+    // Opera GX: os eventos de uma rajada viram uma só leitura da barra, logo em seguida.
+    private static final long STRUCTURE_READ_DELAY_MS = 120L;
+    // O navegador em uso é conferido de novo nesse intervalo, mesmo sem eventos.
+    private static final long MONITOR_INTERVAL_MS = 2000L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -69,6 +75,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private String pendingPageScanKey = "";
     private String lastPageScanKey = "";
     private long lastPageScanAt = 0L;
+    private Runnable pendingStructureRead;
+    private Runnable pendingMonitorCheck;
+    private String monitoredPackage;
+    private String lastMonitoredFirefoxHost;
     private String lastIdentifyPackage = "";
     private long lastIdentifyAt = 0L;
     private String lastUnsupportedBrowser = "";
@@ -101,6 +111,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
     }
 
+    /** Teclado do serviço que registra quando um campo começa a receber texto (Opera GX). */
+    @TargetApi(Build.VERSION_CODES.TIRAMISU)
+    @Override
+    public InputMethod onCreateInputMethod() {
+        return new ServiceInputMethod(this);
+    }
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
@@ -109,6 +126,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         // descartamos este evento para não reutilizar uma árvore anterior ao redirecionamento.
         if (redirectController != null && redirectController.refreshBeforeDetection()) {
             return;
+        }
+
+        // Eventos do navegador em troca de site (e da própria cortina) são descartados antes de
+        // qualquer consulta à árvore: numa rajada, essas consultas atrasavam a cortina e a troca.
+        CharSequence eventPackage = event.getPackageName();
+        if (eventPackage != null) {
+            String name = eventPackage.toString();
+            if (getPackageName().equals(name)) return;
+            if (redirectController != null && redirectController.shouldIgnorePackage(name)) return;
         }
 
         if (store == null) store = new BlockedSitesStore(this);
@@ -188,6 +214,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
 
         verifyAddressBar(packageName, profile, root);
+        if (profile != null) monitorBrowser(packageName);
+
+        // Opera GX (barra lida pela estrutura da tela): cada leitura percorre a árvore da barra,
+        // e o navegador dispara eventos sem parar. Uma rajada vira uma só leitura, logo em
+        // seguida, para a fila de eventos não atrasar a cortina e a troca.
+        if (profile != null && profile.getMethod() == BrowserProfile.Method.TOOLBAR_STRUCTURE) {
+            scheduleStructureRead(packageName);
+            return;
+        }
 
         if (firefox) {
             // Texto digitado e sugestões nunca contam como URL navegada. Todo evento do Firefox
@@ -618,6 +653,98 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
     }
 
+    private void scheduleStructureRead(String expectedPackage) {
+        if (pendingStructureRead != null) return;
+
+        pendingStructureRead = () -> {
+            pendingStructureRead = null;
+            readBrowserNow(expectedPackage);
+        };
+        mainHandler.postDelayed(pendingStructureRead, STRUCTURE_READ_DELAY_MS);
+    }
+
+    /** Lê a barra do navegador agora e bloqueia se o site estiver na lista. */
+    private void readBrowserNow(String packageName) {
+        if (store == null) store = new BlockedSitesStore(this);
+        if (!store.isBlockingActive()) return;
+        if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
+            return;
+        }
+
+        AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+        if (root == null) return;
+
+        String visibleUrl = urlExtractor.extract(root, null, packageName);
+        logReread(packageName, visibleUrl);
+        if (visibleUrl != null) handleVisibleUrl(packageName, visibleUrl, store.getSet());
+    }
+
+    /**
+     * Mantém o navegador em uso sob observação: a cada MONITOR_INTERVAL_MS, com algo a
+     * bloquear, a barra é lida de novo mesmo sem eventos. Um site bloqueado que escapou da troca
+     * (por exemplo, com Voltar) não fica liberado à espera de um novo evento. A observação para
+     * quando o navegador sai da tela.
+     */
+    private void monitorBrowser(String packageName) {
+        if (!packageName.equals(monitoredPackage)) lastMonitoredFirefoxHost = null;
+        monitoredPackage = packageName;
+        if (pendingMonitorCheck != null) return;
+
+        pendingMonitorCheck = this::checkMonitoredBrowser;
+        mainHandler.postDelayed(pendingMonitorCheck, MONITOR_INTERVAL_MS);
+    }
+
+    private void checkMonitoredBrowser() {
+        pendingMonitorCheck = null;
+        String packageName = monitoredPackage;
+        if (packageName == null) return;
+
+        if (store == null) store = new BlockedSitesStore(this);
+        BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+        if (!store.isBlockingActive() || profile == null) {
+            monitoredPackage = null;
+            return;
+        }
+
+        boolean redirecting = redirectController != null
+                && redirectController.shouldIgnorePackage(packageName);
+        if (!redirecting) {
+            if (applicationRootForPackage(packageName) == null) {
+                monitoredPackage = null;
+                return;
+            }
+            if (profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR) {
+                readFirefoxWhileMonitoring(packageName);
+            } else {
+                readBrowserNow(packageName);
+            }
+        }
+
+        pendingMonitorCheck = this::checkMonitoredBrowser;
+        mainHandler.postDelayed(pendingMonitorCheck, MONITOR_INTERVAL_MS);
+    }
+
+    /**
+     * Firefox: uma leitura por ciclo da observação. Como nas releituras após os eventos, a URL só
+     * conta estável: o mesmo domínio em duas leituras seguidas.
+     */
+    private void readFirefoxWhileMonitoring(String packageName) {
+        AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+        String url = urlExtractor.extractFirefoxDisplayedUrl(root, packageName);
+        String host = DomainMatcher.extractHost(url);
+        boolean stable = host != null && host.equals(lastMonitoredFirefoxHost);
+        lastMonitoredFirefoxHost = host;
+        if (stable) handleVisibleUrl(packageName, url, store.getSet());
+    }
+
+    private void cancelMonitoring() {
+        monitoredPackage = null;
+        if (pendingMonitorCheck != null) mainHandler.removeCallbacks(pendingMonitorCheck);
+        pendingMonitorCheck = null;
+        if (pendingStructureRead != null) mainHandler.removeCallbacks(pendingStructureRead);
+        pendingStructureRead = null;
+    }
+
     private void scheduleReread(String expectedPackage) {
         cancelReread();
 
@@ -743,6 +870,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelUnsupportedBrowserCheck();
         cancelAddressBarCheck();
         cancelPageScan();
+        cancelMonitoring();
     }
 
     @Override
@@ -752,6 +880,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         cancelUnsupportedBrowserCheck();
         cancelAddressBarCheck();
         cancelPageScan();
+        cancelMonitoring();
         if (redirectController != null) {
             redirectController.destroy();
             redirectController = null;
