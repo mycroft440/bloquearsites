@@ -18,7 +18,7 @@ O app deliberadamente **não declara permissão de Internet**. A lista e as URLs
 
 Com o app fora da tela, a otimização de bateria do Android e as economias de energia dos fabricantes atrasam o serviço de acessibilidade, e o bloqueio chegava segundos depois de o site ou o navegador abrir. A tela inicial mostra se o app está liberado e oferece:
 
-- **Liberar uso da bateria:** pede ao sistema para tirar o app da otimização de bateria (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, diálogo do Android). Sem o diálogo, abre a lista de otimização de bateria ou os detalhes do app.
+- **Liberar uso da bateria:** ao abrir o app com a bateria otimizada, o diálogo do Android (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) aparece sozinho por cima do app, e basta tocar em **Permitir**. Se o pedido for recusado, ele volta na próxima abertura, e o aviso laranja e o botão **Liberar uso da bateria** o repetem na hora. Sem o diálogo, abre a lista de otimização de bateria ou os detalhes do app. Com a bateria liberada, sobra só o aviso verde.
 - **Xiaomi, Redmi e POCO (MIUI/HyperOS):** atalhos para o **Início automático** e para a **Economia de bateria** do app, onde deve ser escolhido "Sem restrições". Se a tela do fabricante não existir na versão do sistema, abre os detalhes do app.
 
 O Google Play só aceita `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` em casos específicos; revise a política antes de publicar o app lá.
