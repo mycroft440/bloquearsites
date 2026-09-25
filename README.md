@@ -14,6 +14,15 @@ Aplicativo Android simples para bloquear domínios no navegador usando um `Acces
 
 O app deliberadamente **não declara permissão de Internet**. A lista e as URLs lidas da interface permanecem no aparelho.
 
+## Funcionamento em segundo plano
+
+Com o app fora da tela, a otimização de bateria do Android e as economias de energia dos fabricantes atrasam o serviço de acessibilidade, e o bloqueio chegava segundos depois de o site ou o navegador abrir. A tela inicial mostra se o app está liberado e oferece:
+
+- **Liberar uso da bateria:** pede ao sistema para tirar o app da otimização de bateria (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, diálogo do Android). Sem o diálogo, abre a lista de otimização de bateria ou os detalhes do app.
+- **Xiaomi, Redmi e POCO (MIUI/HyperOS):** atalhos para o **Início automático** e para a **Economia de bateria** do app, onde deve ser escolhido "Sem restrições". Se a tela do fabricante não existir na versão do sistema, abre os detalhes do app.
+
+O Google Play só aceita `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` em casos específicos; revise a política antes de publicar o app lá.
+
 ## Famílias de navegadores
 
 Navegadores que expõem a barra de endereço do mesmo jeito ficam na mesma família (`BrowserProfiles`), e cada família tem um método de identificação (`BrowserProfile.Method`). Uma diferença na forma de identificação pede uma família própria.
