@@ -66,7 +66,8 @@ final class VerifiedBrowsers {
         return browserUpdatedAt + "/" + appUpdatedAt;
     }
 
-    private String versionOf(String packageName) {
+    /** Versão instalada do navegador e do app, ou null se não puder ser lida. */
+    String versionOf(String packageName) {
         if (packageName == null) return null;
 
         long now = SystemClock.elapsedRealtime();

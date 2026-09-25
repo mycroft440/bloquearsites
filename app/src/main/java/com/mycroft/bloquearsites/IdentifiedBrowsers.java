@@ -15,7 +15,9 @@ import java.util.Map;
  * navegador pode mostrar um endereço que as páginas não mostram. A família que lê a URL da barra
  * sem falhar por 2 segundos (IdentificationConfirmation) passa a ser a família dele. O resultado
  * fica salvo para as próximas aberturas e para a tela do app. Se nenhuma família se encaixa, o
- * serviço bloqueia o navegador e o registra como rejeitado; ele é testado de novo a cada abertura.
+ * serviço bloqueia o navegador e o registra como rejeitado na versão instalada (dele e do app, a
+ * de VerifiedBrowsers). Nessa versão, ele é fechado assim que abre; depois de uma atualização, é
+ * testado de novo.
  */
 final class IdentifiedBrowsers {
     private static final String PREFS_NAME = "identified_browsers";
@@ -70,14 +72,33 @@ final class IdentifiedBrowsers {
         return CONFIRMATION.isPending(packageName);
     }
 
-    /** Registra que o navegador não se encaixou em nenhuma família e foi bloqueado. */
-    static void markRejected(Context context, String packageName) {
+    /**
+     * Registra que o navegador não se encaixou em nenhuma família e foi bloqueado, na versão
+     * informada (null se a versão não pôde ser lida).
+     */
+    static void markRejected(Context context, String packageName, String version) {
         CONFIRMATION.reset(packageName);
-        rejectedPrefs(context).edit().putBoolean(packageName, true).apply();
+        SharedPreferences.Editor editor = rejectedPrefs(context).edit();
+        if (version == null) {
+            editor.putBoolean(packageName, true);
+        } else {
+            editor.putString(packageName, version);
+        }
+        editor.apply();
     }
 
     static boolean isRejected(Context context, String packageName) {
-        return rejectedPrefs(context).getBoolean(packageName, false);
+        return rejectedPrefs(context).contains(packageName);
+    }
+
+    /** Versão em que o navegador foi recusado, ou null se não foi ou se ela não foi registrada. */
+    static String rejectedVersion(Context context, String packageName) {
+        try {
+            return rejectedPrefs(context).getString(packageName, null);
+        } catch (ClassCastException e) {
+            // Recusa registrada sem a versão (versões anteriores do app).
+            return null;
+        }
     }
 
     private static SharedPreferences rejectedPrefs(Context context) {
