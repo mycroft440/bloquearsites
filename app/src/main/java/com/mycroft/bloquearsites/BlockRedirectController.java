@@ -32,6 +32,9 @@ final class BlockRedirectController {
 
     private static final long REDIRECT_DEBOUNCE_MS = 1200L;
     private static final long REDIRECT_CHECK_DELAY_MS = 250L;
+    // Chegada ao Google conferida pelos eventos: no máximo uma vez nesse intervalo. Numa rajada,
+    // cada evento lia a tela inteira de novo.
+    private static final long EVENT_CHECK_INTERVAL_MS = 100L;
     private static final long SHOW_RETRY_DELAY_MS = 5000L;
     private static final long CURTAIN_MAX_VISIBLE_MS = 3000L;
     // Opera GX e Mi Browser: tempo para o Google aparecer depois da troca pela barra ou da aba nova.
@@ -64,6 +67,7 @@ final class BlockRedirectController {
     private long lastRedirectAt = -REDIRECT_DEBOUNCE_MS;
     private long curtainVisibleUntil = 0L;
     private long redirectDeadline = 0L;
+    private long lastEventCheckAt = -EVENT_CHECK_INTERVAL_MS;
     private boolean newTabFallbackUsed;
     // O Opera GX e o Mi Browser no novo estilo de página editam o endereço numa tela de pesquisa
     // própria; os cuidados com essa tela (fechá-la numa falha, esperar que ela feche e o limite de
@@ -98,6 +102,12 @@ final class BlockRedirectController {
 
     boolean refreshBeforeDetection() {
         if (redirectPackage == null) return false;
+
+        // Entre duas conferências pelos eventos, a checagem periódica (REDIRECT_CHECK_DELAY_MS)
+        // continua valendo, e os eventos do navegador em troca seguem descartados.
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastEventCheckAt < EVENT_CHECK_INTERVAL_MS) return false;
+        lastEventCheckAt = now;
 
         checkRedirectDestination();
 
