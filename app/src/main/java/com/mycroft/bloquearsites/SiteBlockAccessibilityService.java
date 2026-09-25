@@ -19,9 +19,13 @@ import java.util.Set;
 
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
-    private static final long FIREFOX_RETRY_DELAY_MS = 220L;
-    private static final int FIREFOX_RETRY_ATTEMPTS = 16;
-    private static final int FIREFOX_STABLE_READS_REQUIRED = 3;
+    // Firefox: a primeira leitura sai logo após o evento, e a URL conta com o mesmo domínio em duas
+    // leituras seguidas (bloqueio em cerca de 180 ms). As leituras seguem por uns 3,5 s, porque a
+    // barra pode mudar depois do evento sem emitir outro.
+    private static final long FIREFOX_FIRST_READ_DELAY_MS = 60L;
+    private static final long FIREFOX_RETRY_DELAY_MS = 120L;
+    private static final int FIREFOX_RETRY_ATTEMPTS = 30;
+    private static final int FIREFOX_STABLE_READS_REQUIRED = 2;
     private static final long REREAD_DELAY_MS = 250L;
     private static final long UNSUPPORTED_BROWSER_DEBOUNCE_MS = 1500L;
     private static final long UNSUPPORTED_BROWSER_GRACE_MS = 2000L;
@@ -144,6 +148,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         // evento de uma rajada (fonte do evento e janela ativa) atrasavam a leitura em segundos.
         if (eventPackage != null && readsByStructure(eventPackage.toString())) {
             handleStructureBrowserEvent(eventPackage.toString());
+            return;
+        }
+
+        // Firefox: o mesmo vale. O evento só inicia a confirmação da URL exibida na barra.
+        if (eventPackage != null && BrowserProfiles.isFirefoxFamily(eventPackage.toString())) {
+            handleFirefoxEvent(eventPackage.toString());
             return;
         }
 
@@ -560,7 +570,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                 expectedPackage,
                 FIREFOX_RETRY_ATTEMPTS,
                 null,
-                0
+                0,
+                FIREFOX_FIRST_READ_DELAY_MS
         );
     }
 
@@ -568,7 +579,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             String expectedPackage,
             int attemptsRemaining,
             String previousHost,
-            int stableReads
+            int stableReads,
+            long delayMs
     ) {
         pendingFirefoxRetry = () -> {
             pendingFirefoxRetry = null;
@@ -577,11 +589,22 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             String nextHost = previousHost;
             int nextStableReads = stableReads;
 
+            if (redirectController != null
+                    && redirectController.shouldIgnorePackage(expectedPackage)) {
+                return;
+            }
+
             AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
             if (root != null) {
                 if (store == null) store = new BlockedSitesStore(this);
                 if (!store.isBlockingActive()) return;
                 Set<String> blockedSites = store.getSet();
+
+                // A conferência da barra por versão, que o evento já não faz, usa a mesma janela.
+                if (attemptNumber == 1) {
+                    verifyAddressBar(
+                            expectedPackage, BrowserProfiles.forPackage(expectedPackage), root);
+                }
 
                 String loadedUrl = urlExtractor.extractFirefoxDisplayedUrl(root, expectedPackage);
                 String host = DomainMatcher.extractHost(loadedUrl);
@@ -619,12 +642,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
                         expectedPackage,
                         attemptsRemaining - 1,
                         nextHost,
-                        nextStableReads
+                        nextStableReads,
+                        FIREFOX_RETRY_DELAY_MS
                 );
             }
         };
 
-        mainHandler.postDelayed(pendingFirefoxRetry, FIREFOX_RETRY_DELAY_MS);
+        mainHandler.postDelayed(pendingFirefoxRetry, delayMs);
     }
 
     private void cancelFirefoxRetry() {
@@ -677,6 +701,19 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         monitorBrowser(packageName);
         scheduleStructureRead(packageName);
+    }
+
+    /** Evento do Firefox: inicia a confirmação da URL e mantém o navegador sob observação. */
+    private void handleFirefoxEvent(String packageName) {
+        cancelReread();
+        if (!store.isBlockingActive()) {
+            cancelFirefoxRetry();
+            cancelPageScan();
+            return;
+        }
+
+        monitorBrowser(packageName);
+        scheduleFirefoxRetry(packageName);
     }
 
     private void scheduleStructureRead(String expectedPackage) {
