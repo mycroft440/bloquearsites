@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Pede ao usuário que tire o app da otimização de bateria, para o bloqueio seguir rápido em
+         segundo plano. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Torna visíveis os apps que abrem links web, para identificar os navegadores instalados. -->
     <queries>
         <intent>

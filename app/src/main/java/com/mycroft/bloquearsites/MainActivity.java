@@ -27,6 +27,8 @@ import java.util.Collections;
 import java.util.List;
 
 public final class MainActivity extends Activity {
+    private static final String STATE_BATTERY_PROMPTED = "battery_prompted";
+
     private BlockedSitesStore store;
     private ArrayAdapter<String> adapter;
     private final List<String> domains = new ArrayList<>();
@@ -34,11 +36,19 @@ public final class MainActivity extends Activity {
     private TextView statusView;
     private TextView emptyView;
     private TextView browsersView;
+    private TextView backgroundStatusView;
+    private TextView backgroundHintView;
+    private Button batteryButton;
+    // O pedido de bateria aparece sozinho uma vez a cada abertura do app, enquanto não for aceito.
+    private boolean batteryPrompted;
+    private boolean awaitingBatteryAnswer;
     private EditText siteInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        batteryPrompted = savedInstanceState != null
+                && savedInstanceState.getBoolean(STATE_BATTERY_PROMPTED);
         store = new BlockedSitesStore(this);
         setContentView(buildContentView());
         refreshSites();
@@ -48,8 +58,47 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateAccessibilityStatus();
+        updateBackgroundStatus();
+        promptBatteryIfNeeded();
         refreshSites();
         refreshBrowsers();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(STATE_BATTERY_PROMPTED, batteryPrompted);
+    }
+
+    /**
+     * Ao abrir o app com a bateria otimizada, o diálogo do sistema ("Permitir") aparece sozinho, por
+     * cima do app: basta um toque. Se o usuário recusar, o pedido só volta na próxima abertura ou
+     * pelo aviso laranja.
+     */
+    private void promptBatteryIfNeeded() {
+        boolean unrestricted = BackgroundAccess.isIgnoringBatteryOptimizations(this);
+        if (awaitingBatteryAnswer) {
+            awaitingBatteryAnswer = false;
+            if (unrestricted) {
+                Toast.makeText(
+                        this,
+                        BackgroundAccess.hasManufacturerRestrictions()
+                                ? "Bateria liberada. Na Xiaomi, libere também o início automático."
+                                : "Pronto! O bloqueio funciona na hora, mesmo com o app fechado.",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+            return;
+        }
+        if (unrestricted || batteryPrompted) return;
+
+        batteryPrompted = true;
+        requestBattery();
+    }
+
+    private void requestBattery() {
+        awaitingBatteryAnswer = true;
+        BackgroundAccess.requestIgnoreBatteryOptimizations(this);
     }
 
     private View buildContentView() {
@@ -84,6 +133,8 @@ public final class MainActivity extends Activity {
         buttonParams.setMargins(0, dp(10), 0, dp(18));
         root.addView(accessibilityButton, buttonParams);
         accessibilityButton.setOnClickListener(v -> showAccessibilityDisclosure());
+
+        addBackgroundSection(root);
 
         Switch adultSwitch = new Switch(this);
         adultSwitch.setText("Bloquear pornografia");
@@ -204,6 +255,88 @@ public final class MainActivity extends Activity {
         root.addView(footer, matchWrap());
 
         return root;
+    }
+
+    /**
+     * Funcionamento em segundo plano: com o app fora da tela, a otimização de bateria atrasa o
+     * bloqueio. O usuário libera o app aqui (e, na Xiaomi, também nas telas do fabricante).
+     */
+    private void addBackgroundSection(LinearLayout root) {
+        backgroundStatusView = new TextView(this);
+        backgroundStatusView.setTextSize(15f);
+        backgroundStatusView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        root.addView(backgroundStatusView, matchWrap());
+        // O próprio aviso laranja também pede a liberação ao ser tocado.
+        backgroundStatusView.setOnClickListener(v -> {
+            if (!BackgroundAccess.isIgnoringBatteryOptimizations(this)) requestBattery();
+        });
+
+        backgroundHintView = new TextView(this);
+        backgroundHintView.setText("Com a bateria otimizada, o sistema atrasa o bloqueio quando o app"
+                + " não está aberto. Toque em \"Liberar uso da bateria\" e depois em \"Permitir\".");
+        backgroundHintView.setTextSize(12f);
+        backgroundHintView.setTextColor(Color.GRAY);
+        backgroundHintView.setPadding(0, dp(6), 0, 0);
+        root.addView(backgroundHintView, matchWrap());
+
+        batteryButton = new Button(this);
+        batteryButton.setAllCaps(false);
+        LinearLayout.LayoutParams batteryParams = matchWrap();
+        batteryParams.setMargins(0, dp(6), 0, 0);
+        root.addView(batteryButton, batteryParams);
+        batteryButton.setOnClickListener(v -> requestBattery());
+
+        if (BackgroundAccess.hasManufacturerRestrictions()) {
+            TextView xiaomiHint = new TextView(this);
+            xiaomiHint.setText("Na Xiaomi, ative também o início automático e escolha"
+                    + " \"Sem restrições\" na economia de bateria do app.");
+            xiaomiHint.setTextSize(12f);
+            xiaomiHint.setTextColor(Color.GRAY);
+            xiaomiHint.setPadding(0, dp(6), 0, 0);
+            root.addView(xiaomiHint, matchWrap());
+
+            LinearLayout xiaomiRow = new LinearLayout(this);
+            xiaomiRow.setOrientation(LinearLayout.HORIZONTAL);
+
+            Button autoStartButton = new Button(this);
+            autoStartButton.setText("Início automático");
+            autoStartButton.setAllCaps(false);
+            autoStartButton.setOnClickListener(v -> BackgroundAccess.openAutoStartSettings(this));
+            xiaomiRow.addView(autoStartButton, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            Button xiaomiBatteryButton = new Button(this);
+            xiaomiBatteryButton.setText("Economia de bateria");
+            xiaomiBatteryButton.setAllCaps(false);
+            xiaomiBatteryButton.setOnClickListener(
+                    v -> BackgroundAccess.openManufacturerBatterySettings(this));
+            LinearLayout.LayoutParams xiaomiBatteryParams = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            xiaomiBatteryParams.setMargins(dp(8), 0, 0, 0);
+            xiaomiRow.addView(xiaomiBatteryButton, xiaomiBatteryParams);
+
+            root.addView(xiaomiRow, matchWrap());
+        }
+
+        View spacer = new View(this);
+        root.addView(spacer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(18)));
+    }
+
+    private void updateBackgroundStatus() {
+        boolean unrestricted = BackgroundAccess.isIgnoringBatteryOptimizations(this);
+        backgroundStatusView.setText(unrestricted
+                ? "\u2705 Bateria sem restrição — bloqueio em segundo plano liberado"
+                : "\u26A0 Bateria otimizada — toque aqui para liberar");
+        backgroundStatusView.setTextColor(
+                unrestricted ? Color.rgb(0, 105, 62) : Color.rgb(170, 70, 0));
+        backgroundStatusView.setBackgroundColor(
+                unrestricted ? Color.rgb(226, 244, 234) : Color.rgb(255, 239, 220));
+
+        // Liberado, sobra só o aviso verde.
+        batteryButton.setText("Liberar uso da bateria");
+        batteryButton.setVisibility(unrestricted ? View.GONE : View.VISIBLE);
+        backgroundHintView.setVisibility(unrestricted ? View.GONE : View.VISIBLE);
     }
 
     private void addSite() {

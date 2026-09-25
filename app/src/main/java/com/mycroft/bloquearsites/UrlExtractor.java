@@ -1,5 +1,7 @@
 package com.mycroft.bloquearsites;
 
+import android.graphics.Rect;
+import android.os.Build;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.util.ArrayDeque;
@@ -156,14 +158,56 @@ public final class UrlExtractor {
         return extractGeneric(root);
     }
 
+    /**
+     * Opera GX: a barra é lida numa só passada pela árvore, com as mesmas prioridades de antes (o
+     * campo em edição, o texto da barra e, por último, um ID com cara de barra de endereço). Cada
+     * passada custa consultas ao navegador, que demoram enquanto a página carrega; com três
+     * passadas, o site ficava segundos na tela antes do bloqueio.
+     *
+     * Sem um campo do navegador conectado ao teclado do serviço, não há campo em edição, e a leitura
+     * para no primeiro texto da barra com URL, sem percorrer o resto da tela.
+     */
     private String extractByToolbarStructure(AccessibilityNodeInfo root, String packageName) {
-        if (root == null) return null;
+        Rect rootBounds = ToolbarStructure.boundsOf(root);
+        if (rootBounds == null) return null;
 
-        // Em edição, só o campo digitado conta: as sugestões abaixo dele também mostram URLs.
-        AccessibilityNodeInfo editing = ToolbarStructure.findFocusedEditField(root, packageName);
-        if (editing != null) return ToolbarStructure.wholeUrl(editing.getText());
+        // O teclado do serviço só existe no Android 13+ (a classe nem carrega antes disso).
+        boolean mayBeEditing = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ServiceInputMethod.mayBeEditing(packageName);
+        String[] editing = {null};
+        boolean[] editingFound = {false};
+        String[] shown = {null};
+        String[] byId = {null};
 
-        return extractToolbarDisplay(root, packageName);
+        NodeSearch.visit(root, node -> {
+            // Em edição, só o campo digitado conta: as sugestões abaixo dele também mostram URLs.
+            if (mayBeEditing
+                    && node.isFocused()
+                    && node.isEditable()
+                    && ToolbarStructure.isToolbarText(node, rootBounds, packageName)) {
+                editing[0] = ToolbarStructure.wholeUrl(node.getText());
+                editingFound[0] = true;
+                return true;
+            }
+
+            if (shown[0] == null) {
+                String url = ToolbarStructure.wholeUrl(node.getText());
+                if (url != null && ToolbarStructure.isToolbarText(node, rootBounds, packageName)) {
+                    shown[0] = url;
+                    return !mayBeEditing;
+                }
+            }
+
+            if (byId[0] == null
+                    && hasAddressLikeId(node)
+                    && NodeSearch.isVisibleInPackage(node, packageName)) {
+                byId[0] = firstUrlLikeValue(node);
+            }
+            return false;
+        });
+
+        if (editingFound[0]) return editing[0];
+        return shown[0] != null ? shown[0] : byId[0];
     }
 
     /**
