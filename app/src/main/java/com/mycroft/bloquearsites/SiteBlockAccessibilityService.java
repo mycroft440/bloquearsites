@@ -139,6 +139,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (store == null) store = new BlockedSitesStore(this);
 
+        // Opera GX: o evento só agenda a leitura da barra, sem nenhuma consulta ao navegador aqui.
+        // Enquanto a página carrega, o navegador demora a responder, e as consultas feitas a cada
+        // evento de uma rajada (fonte do evento e janela ativa) atrasavam a leitura em segundos.
+        if (eventPackage != null && readsByStructure(eventPackage.toString())) {
+            handleStructureBrowserEvent(eventPackage.toString());
+            return;
+        }
+
         AccessibilityNodeInfo source = event.getSource();
         AccessibilityNodeInfo root = getRootInActiveWindow();
 
@@ -653,26 +661,48 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         }
     }
 
+    private static boolean readsByStructure(String packageName) {
+        BrowserProfile profile = BrowserProfiles.forPackage(packageName);
+        return profile != null && profile.getMethod() == BrowserProfile.Method.TOOLBAR_STRUCTURE;
+    }
+
+    /** Evento do Opera GX: agenda a leitura da barra e mantém o navegador sob observação. */
+    private void handleStructureBrowserEvent(String packageName) {
+        cancelFirefoxRetry();
+        if (!store.isBlockingActive()) {
+            cancelReread();
+            cancelPageScan();
+            return;
+        }
+
+        monitorBrowser(packageName);
+        scheduleStructureRead(packageName);
+    }
+
     private void scheduleStructureRead(String expectedPackage) {
         if (pendingStructureRead != null) return;
 
         pendingStructureRead = () -> {
             pendingStructureRead = null;
-            readBrowserNow(expectedPackage);
+            if (redirectController != null
+                    && redirectController.shouldIgnorePackage(expectedPackage)) {
+                return;
+            }
+
+            AccessibilityNodeInfo root = applicationRootForPackage(expectedPackage);
+            if (root == null) return;
+
+            // A conferência da barra por versão, que o evento já não faz, usa a mesma janela.
+            verifyAddressBar(expectedPackage, BrowserProfiles.forPackage(expectedPackage), root);
+            readBrowserRoot(expectedPackage, root);
         };
         mainHandler.postDelayed(pendingStructureRead, STRUCTURE_READ_DELAY_MS);
     }
 
     /** Lê a barra do navegador agora e bloqueia se o site estiver na lista. */
-    private void readBrowserNow(String packageName) {
+    private void readBrowserRoot(String packageName, AccessibilityNodeInfo root) {
         if (store == null) store = new BlockedSitesStore(this);
         if (!store.isBlockingActive()) return;
-        if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
-            return;
-        }
-
-        AccessibilityNodeInfo root = applicationRootForPackage(packageName);
-        if (root == null) return;
 
         String visibleUrl = urlExtractor.extract(root, null, packageName);
         logReread(packageName, visibleUrl);
@@ -709,14 +739,15 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         boolean redirecting = redirectController != null
                 && redirectController.shouldIgnorePackage(packageName);
         if (!redirecting) {
-            if (applicationRootForPackage(packageName) == null) {
+            AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+            if (root == null) {
                 monitoredPackage = null;
                 return;
             }
             if (profile.getMethod() == BrowserProfile.Method.FIREFOX_TOOLBAR) {
-                readFirefoxWhileMonitoring(packageName);
+                readFirefoxWhileMonitoring(packageName, root);
             } else {
-                readBrowserNow(packageName);
+                readBrowserRoot(packageName, root);
             }
         }
 
@@ -728,8 +759,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
      * Firefox: uma leitura por ciclo da observação. Como nas releituras após os eventos, a URL só
      * conta estável: o mesmo domínio em duas leituras seguidas.
      */
-    private void readFirefoxWhileMonitoring(String packageName) {
-        AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+    private void readFirefoxWhileMonitoring(String packageName, AccessibilityNodeInfo root) {
         String url = urlExtractor.extractFirefoxDisplayedUrl(root, packageName);
         String host = DomainMatcher.extractHost(url);
         boolean stable = host != null && host.equals(lastMonitoredFirefoxHost);

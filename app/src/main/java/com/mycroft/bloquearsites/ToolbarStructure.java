@@ -65,7 +65,7 @@ final class ToolbarStructure {
         return DomainMatcher.extractHost(value) == null ? null : value;
     }
 
-    private static boolean isToolbarText(
+    static boolean isToolbarText(
             AccessibilityNodeInfo node,
             Rect rootBounds,
             String packageName
@@ -97,7 +97,7 @@ final class ToolbarStructure {
         return parentBounds.width() >= Math.round(rootBounds.width() * MIN_BAR_WIDTH);
     }
 
-    private static Rect boundsOf(AccessibilityNodeInfo root) {
+    static Rect boundsOf(AccessibilityNodeInfo root) {
         if (root == null) return null;
         Rect bounds = new Rect();
         root.getBoundsInScreen(bounds);

@@ -59,7 +59,21 @@ final class NodeSearch {
             AccessibilityNodeInfo root,
             Predicate<AccessibilityNodeInfo> matcher
     ) {
-        if (root == null) return null;
+        AccessibilityNodeInfo[] found = {null};
+        visit(root, node -> {
+            if (!matcher.test(node)) return false;
+            found[0] = node;
+            return true;
+        });
+        return found[0];
+    }
+
+    /**
+     * Percorre em largura os nós fora do conteúdo da página, até o visitante retornar true. Permite
+     * várias buscas numa só passada pela árvore.
+     */
+    static void visit(AccessibilityNodeInfo root, Predicate<AccessibilityNodeInfo> visitor) {
+        if (root == null) return;
 
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
@@ -70,7 +84,7 @@ final class NodeSearch {
             visited++;
 
             if (isWebContent(node)) continue;
-            if (matcher.test(node)) return node;
+            if (visitor.test(node)) return;
 
             int childCount = node.getChildCount();
             for (int i = 0; i < childCount; i++) {
@@ -78,6 +92,5 @@ final class NodeSearch {
                 if (child != null) queue.addLast(child);
             }
         }
-        return null;
     }
 }

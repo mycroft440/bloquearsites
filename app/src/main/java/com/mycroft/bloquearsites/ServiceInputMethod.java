@@ -18,15 +18,34 @@ import android.view.inputmethod.EditorInfo;
 final class ServiceInputMethod extends InputMethod {
     private static volatile long lastStartAt = 0L;
     private static volatile String lastStartPackage;
+    // Pacote do campo conectado agora ao teclado do serviço (null sem campo conectado).
+    private static volatile String activePackage;
+    private static volatile boolean created;
 
     ServiceInputMethod(AccessibilityService service) {
         super(service);
+        created = true;
     }
 
     @Override
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         lastStartPackage = attribute == null ? null : attribute.packageName;
         lastStartAt = SystemClock.elapsedRealtime();
+        activePackage = lastStartPackage;
+    }
+
+    @Override
+    public void onFinishInput() {
+        activePackage = null;
+    }
+
+    /**
+     * Se um campo do pacote pode estar em edição. Se o sistema não criou o teclado do serviço, não
+     * há como saber, e a resposta é sim. Só pode ser chamado no Android 13+.
+     */
+    static boolean mayBeEditing(String packageName) {
+        if (!created) return true;
+        return packageName != null && packageName.equals(activePackage);
     }
 
     /** Se um campo do pacote começou a receber texto a partir do instante indicado. */
