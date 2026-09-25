@@ -138,8 +138,8 @@ final class BlockRedirectController {
         curtainVisibleUntil = SystemClock.elapsedRealtime() + curtainMs;
         redirectDeadline = SystemClock.elapsedRealtime() + REDIRECT_TIMEOUT_MS;
 
-        // Enquanto a barra é preenchida a cortina deixa toques passarem: no Firefox a edição só
-        // abre com um toque simulado, que a cortina interceptaria. Uma cortina nova já nasce assim,
+        // Até a barra ser tocada a cortina deixa toques passarem: no Firefox a edição só abre com
+        // um toque simulado, que a cortina interceptaria. Uma cortina nova já nasce assim,
         // para não disputar com o toque a atualização da janela.
         boolean curtainAlreadyShown = blockCurtain != null;
         setCurtainPassThrough(true);
@@ -203,10 +203,13 @@ final class BlockRedirectController {
 
     private boolean startAddressBarNavigation() {
         setCurtainPassThrough(true);
+        // Os toques passam pela cortina só até a barra ser tocada: o resto da troca não usa a
+        // tela, e o site bloqueado não pode receber toques do usuário nesse meio tempo.
         if (!addressBarNavigator.start(
                 redirectPackage,
                 REDIRECT_URL,
-                this::onAddressBarNavigationFinished)) {
+                this::onAddressBarNavigationFinished,
+                () -> setCurtainPassThrough(false))) {
             return false;
         }
 

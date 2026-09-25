@@ -87,6 +87,9 @@ final class AddressBarNavigator {
     private boolean editorActionSubmit;
     private boolean inputConnectionTyping;
     private long barTouchedAt;
+    private Runnable touchDone;
+    // Descarta avisos de toque de uma troca anterior.
+    private int touchGeneration;
 
     AddressBarNavigator(AccessibilityService service, Handler mainHandler) {
         this.service = service;
@@ -96,9 +99,13 @@ final class AddressBarNavigator {
     /**
      * Inicia a navegação. Retorna false quando ela não pode começar; nesse caso o callback
      * não é chamado e quem chamou deve usar outra forma de redirecionar.
+     *
+     * @param touchDone chamado quando a barra já foi tocada (ou não precisou de toque): daí em
+     *                  diante a troca não depende de toques na tela, e a cortina pode barrá-los
      */
-    boolean start(String packageName, String url, Callback callback) {
+    boolean start(String packageName, String url, Callback callback, Runnable touchDone) {
         cancel();
+        this.touchDone = touchDone;
 
         // ACTION_IME_ENTER só existe a partir do Android 11. Sem ele não há como confirmar a URL.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
@@ -128,6 +135,7 @@ final class AddressBarNavigator {
                     && !editField.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
                 return false;
             }
+            postTouchDone();
         } else {
             // Nos Custom Tabs do Chrome o url_bar é só leitura, e tocar nele não abre edição.
             if (BrowserProfiles.isChromium(packageName)) return false;
@@ -149,7 +157,9 @@ final class AddressBarNavigator {
                 editorActionSubmit = true;
             }
 
-            if (!(display.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tap(display))) {
+            if (display.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                postTouchDone();
+            } else if (!tap(display)) {
                 log("barra não tocada");
                 return false;
             }
@@ -170,6 +180,8 @@ final class AddressBarNavigator {
     }
 
     void cancel() {
+        touchGeneration++;
+        touchDone = null;
         if (pendingStep != null) mainHandler.removeCallbacks(pendingStep);
         pendingStep = null;
         callback = null;
@@ -189,7 +201,31 @@ final class AddressBarNavigator {
         GestureDescription gesture = new GestureDescription.Builder()
                 .addStroke(new GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS))
                 .build();
-        return service.dispatchGesture(gesture, null, null);
+        int generation = touchGeneration;
+        AccessibilityService.GestureResultCallback done = new AccessibilityService.GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription description) {
+                notifyTouchDone(generation);
+            }
+
+            @Override
+            public void onCancelled(GestureDescription description) {
+                notifyTouchDone(generation);
+            }
+        };
+        return service.dispatchGesture(gesture, done, mainHandler);
+    }
+
+    private void postTouchDone() {
+        int generation = touchGeneration;
+        mainHandler.post(() -> notifyTouchDone(generation));
+    }
+
+    private void notifyTouchDone(int generation) {
+        if (generation != touchGeneration || touchDone == null) return;
+        Runnable done = touchDone;
+        touchDone = null;
+        done.run();
     }
 
     private void typeUrl(int attempt) {

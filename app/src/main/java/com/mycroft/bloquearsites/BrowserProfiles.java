@@ -195,6 +195,12 @@ public final class BrowserProfiles {
         return forPackage(packageName) == FIREFOX;
     }
 
+    /** Firefox ou um derivado identificado como da família (lido pela toolbar do Firefox). */
+    public static boolean isFirefoxFamily(String packageName) {
+        BrowserProfile profile = forPackage(packageName);
+        return profile != null && profile.getMethod() == Method.FIREFOX_TOOLBAR;
+    }
+
     public static boolean isAospBrowser(String packageName) {
         return forPackage(packageName) == AOSP_BROWSER;
     }
