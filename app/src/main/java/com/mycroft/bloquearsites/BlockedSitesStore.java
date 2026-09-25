@@ -15,6 +15,10 @@ public final class BlockedSitesStore {
     private static final String KEY_ADULT_FILTER = "block_adult_content";
 
     private final SharedPreferences preferences;
+    // Lista normalizada, refeita só quando a lista salva muda: o SharedPreferences devolve o mesmo
+    // conjunto até a próxima gravação.
+    private Set<String> normalizedSource;
+    private Set<String> normalizedDomains = Collections.emptySet();
 
     public BlockedSitesStore(Context context) {
         preferences = context.getApplicationContext()
@@ -41,6 +45,24 @@ public final class BlockedSitesStore {
         return new HashSet<>(preferences.getStringSet(KEY_DOMAINS, Collections.emptySet()));
     }
 
+    /**
+     * Domínios da lista já normalizados (DomainMatcher.normalizeBlockedInput), para a comparação
+     * não normalizar a lista inteira a cada leitura da barra.
+     */
+    public synchronized Set<String> getNormalizedDomains() {
+        Set<String> saved = preferences.getStringSet(KEY_DOMAINS, Collections.emptySet());
+        if (saved != normalizedSource) {
+            Set<String> normalized = new HashSet<>();
+            for (String domain : saved) {
+                String value = DomainMatcher.normalizeBlockedInput(domain);
+                if (value != null) normalized.add(value);
+            }
+            normalizedSource = saved;
+            normalizedDomains = Collections.unmodifiableSet(normalized);
+        }
+        return normalizedDomains;
+    }
+
     /** Opção "Bloquear pornografia" (AdultContentFilter). */
     public boolean isAdultFilterEnabled() {
         return preferences.getBoolean(KEY_ADULT_FILTER, false);
@@ -52,7 +74,8 @@ public final class BlockedSitesStore {
 
     /** Se há algo a bloquear: sites na lista ou o bloqueio de pornografia ligado. */
     public boolean isBlockingActive() {
-        return isAdultFilterEnabled() || !getSet().isEmpty();
+        return isAdultFilterEnabled()
+                || !preferences.getStringSet(KEY_DOMAINS, Collections.emptySet()).isEmpty();
     }
 
     public List<String> getSortedList() {

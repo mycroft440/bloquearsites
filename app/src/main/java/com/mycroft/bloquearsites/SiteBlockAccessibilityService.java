@@ -15,8 +15,6 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
-import java.util.Set;
-
 public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long BLOCK_DEBOUNCE_MS = 1200L;
     // Firefox: a primeira leitura sai logo após o evento, e a URL conta com o mesmo domínio em duas
@@ -46,6 +44,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private static final long STRUCTURE_READ_DELAY_MS = 120L;
     // O navegador em uso é conferido de novo nesse intervalo, mesmo sem eventos.
     private static final long MONITOR_INTERVAL_MS = 2000L;
+    // Apps que não são navegadores: no máximo uma busca pela barra de endereço nesse intervalo.
+    private static final long OTHER_APP_READ_INTERVAL_MS = 300L;
 
     private static final String FIREFOX_LOG_TAG = "BloquearSitesFirefox";
     private static final String REREAD_LOG_TAG = "BloquearSitesReread";
@@ -69,6 +69,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private long lastBlockedAt = 0L;
     private Runnable pendingFirefoxRetry;
     private String pendingFirefoxPackage;
+    // A leitura pendente é só a confirmação da observação contínua, não a sequência de um evento.
+    private boolean pendingFirefoxIsCheck;
     private Runnable pendingReread;
     private Runnable pendingUnsupportedCheck;
     private String pendingUnsupportedPackage;
@@ -82,7 +84,10 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private Runnable pendingStructureRead;
     private Runnable pendingMonitorCheck;
     private String monitoredPackage;
-    private String lastMonitoredFirefoxHost;
+    private String lastOtherAppPackage = "";
+    private long lastOtherAppReadAt = 0L;
+    private Runnable pendingOtherAppRead;
+    private String pendingOtherAppPackage;
     private String lastIdentifyPackage = "";
     private long lastIdentifyAt = 0L;
     private String lastUnsupportedBrowser = "";
@@ -157,6 +162,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // App que não é navegador, lido há pouco: o evento não consulta o app.
+        if (eventPackage != null
+                && throttleOtherApp(eventPackage.toString(), event.getEventType())) {
+            return;
+        }
+
         AccessibilityNodeInfo source = event.getSource();
         AccessibilityNodeInfo root = getRootInActiveWindow();
 
@@ -182,9 +193,8 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
-        Set<String> blockedSites = store.getSet();
         boolean adultFilter = store.isAdultFilterEnabled();
-        if (blockedSites.isEmpty() && !adultFilter) {
+        if (!store.isBlockingActive()) {
             cancelFirefoxRetry();
             cancelReread();
             cancelPageScan();
@@ -231,8 +241,13 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             rereads = profile.rereadsAfterEvent();
         }
 
-        verifyAddressBar(packageName, profile, root);
-        if (profile != null) monitorBrowser(packageName);
+        // A conferência da barra por versão só vale para navegadores com família. Num app que não é
+        // navegador ela percorria a tela a cada evento (em apps com página embutida, como
+        // propagandas) sem nunca ter efeito.
+        if (profile != null) {
+            verifyAddressBar(packageName, profile, root);
+            monitorBrowser(packageName);
+        }
 
         // Opera GX (barra lida pela estrutura da tela): cada leitura percorre a árvore da barra,
         // e o navegador dispara eventos sem parar. Uma rajada vira uma só leitura, logo em
@@ -249,6 +264,14 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // Sem família aqui, é um app que não é navegador (os navegadores sem família saíram acima):
+        // só a busca genérica pela barra, espaçada por throttleOtherApp.
+        if (profile == null
+                && eventPackage != null
+                && packageName.equals(eventPackage.toString())) {
+            noteOtherAppRead(packageName);
+        }
+
         AccessibilityNodeInfo extractionRoot = root;
         if (rereads && !sameWindow(event, root)) {
             // Se o evento e a raiz apontam para janelas diferentes, a fonte do evento é mais
@@ -260,7 +283,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         if (visibleUrl != null) {
             cancelReread();
-            handleVisibleUrl(packageName, visibleUrl, blockedSites);
+            handleVisibleUrl(packageName, visibleUrl);
             return;
         }
 
@@ -281,6 +304,62 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         if (rereads) {
             scheduleReread(packageName);
         }
+    }
+
+    /**
+     * Apps que não são navegadores passam só pela busca genérica de barra de endereço, que cobre
+     * navegadores embutidos em outros apps. Depois de uma leitura, os eventos do mesmo app pelos
+     * próximos OTHER_APP_READ_INTERVAL_MS não consultam o app: viram uma só leitura no fim do
+     * intervalo, com a tela já no estado final. Antes, cada evento de qualquer app fazia consultas
+     * e buscas na tela.
+     */
+    private boolean throttleOtherApp(String eventPackage, int eventType) {
+        if (!eventPackage.equals(lastOtherAppPackage)) return false;
+        long elapsed = SystemClock.elapsedRealtime() - lastOtherAppReadAt;
+        if (elapsed >= OTHER_APP_READ_INTERVAL_MS) return false;
+
+        // Os outros tipos de evento já eram descartados para apps que não são navegadores.
+        if (isLegacyEventType(eventType)) {
+            scheduleOtherAppRead(eventPackage, OTHER_APP_READ_INTERVAL_MS - elapsed);
+        }
+        return true;
+    }
+
+    private void noteOtherAppRead(String packageName) {
+        if (pendingOtherAppRead != null && !packageName.equals(pendingOtherAppPackage)) {
+            cancelOtherAppRead();
+        }
+        lastOtherAppPackage = packageName;
+        lastOtherAppReadAt = SystemClock.elapsedRealtime();
+    }
+
+    private void scheduleOtherAppRead(String packageName, long delayMs) {
+        if (pendingOtherAppRead != null) return;
+
+        pendingOtherAppPackage = packageName;
+        pendingOtherAppRead = () -> {
+            pendingOtherAppRead = null;
+            noteOtherAppRead(packageName);
+
+            if (store == null) store = new BlockedSitesStore(this);
+            if (!store.isBlockingActive()) return;
+            if (redirectController != null && redirectController.shouldIgnorePackage(packageName)) {
+                return;
+            }
+
+            AccessibilityNodeInfo root = applicationRootForPackage(packageName);
+            if (root == null) return;
+
+            String visibleUrl = urlExtractor.extract(root, null, packageName);
+            if (visibleUrl != null) handleVisibleUrl(packageName, visibleUrl);
+        };
+        mainHandler.postDelayed(pendingOtherAppRead, Math.max(0L, delayMs));
+    }
+
+    private void cancelOtherAppRead() {
+        if (pendingOtherAppRead == null) return;
+        mainHandler.removeCallbacks(pendingOtherAppRead);
+        pendingOtherAppRead = null;
     }
 
     private String resolvePackageName(
@@ -304,11 +383,9 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
         return rootPackage;
     }
 
-    private void handleVisibleUrl(
-            String packageName,
-            String visibleUrl,
-            Set<String> blockedSites
-    ) {
+    private void handleVisibleUrl(String packageName, String visibleUrl) {
+        if (store == null) store = new BlockedSitesStore(this);
+
         // O destino do redirecionamento fica fora da lista para impedir loop. Uma busca explícita no
         // Google não é o destino (isRedirectDestination); as demais páginas do Google, como o Google
         // Imagens, ainda têm o texto conferido pelo filtro de pornografia.
@@ -317,9 +394,9 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             return;
         }
 
-        String matchedDomain = DomainMatcher.findMatchedDomain(visibleUrl, blockedSites);
+        String matchedDomain = DomainMatcher.findMatchedDomainNormalized(
+                visibleUrl, store.getNormalizedDomains());
         boolean adult = matchedDomain == null
-                && store != null
                 && store.isAdultFilterEnabled()
                 && AdultContentFilter.blocksUrl(visibleUrl);
         if (matchedDomain == null && !adult) {
@@ -424,7 +501,6 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
             if (store == null) store = new BlockedSitesStore(this);
             if (!store.isBlockingActive()) return;
-            Set<String> blockedSites = store.getSet();
 
             AccessibilityNodeInfo root = applicationRootForPackage(packageName);
             if (root == null || !NodeSearch.containsWebContent(root)) return;
@@ -432,7 +508,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             BrowserProfile family = IdentifiedBrowsers.identify(this, urlExtractor, packageName, root);
             if (family != null) {
                 String url = urlExtractor.extract(root, null, packageName);
-                if (url != null) handleVisibleUrl(packageName, url, blockedSites);
+                if (url != null) handleVisibleUrl(packageName, url);
                 return;
             }
 
@@ -562,10 +638,16 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
     private void scheduleFirefoxRetry(String expectedPackage) {
         // Eventos sucessivos do mesmo navegador não reiniciam a sequência. A URL precisa aparecer
         // estável na toolbar de exibição antes de ser considerada realmente carregada.
-        if (pendingFirefoxRetry != null && expectedPackage.equals(pendingFirefoxPackage)) return;
+        // Uma confirmação da observação contínua dá lugar à sequência completa do evento.
+        if (pendingFirefoxRetry != null
+                && expectedPackage.equals(pendingFirefoxPackage)
+                && !pendingFirefoxIsCheck) {
+            return;
+        }
 
         cancelFirefoxRetry();
         pendingFirefoxPackage = expectedPackage;
+        pendingFirefoxIsCheck = false;
         scheduleFirefoxRetryAttempt(
                 expectedPackage,
                 FIREFOX_RETRY_ATTEMPTS,
@@ -598,7 +680,6 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
             if (root != null) {
                 if (store == null) store = new BlockedSitesStore(this);
                 if (!store.isBlockingActive()) return;
-                Set<String> blockedSites = store.getSet();
 
                 // A conferência da barra por versão, que o evento já não faz, usa a mesma janela.
                 if (attemptNumber == 1) {
@@ -624,7 +705,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
                 if (loadedUrl != null
                         && nextStableReads >= FIREFOX_STABLE_READS_REQUIRED) {
-                    handleVisibleUrl(expectedPackage, loadedUrl, blockedSites);
+                    handleVisibleUrl(expectedPackage, loadedUrl);
 
                     if (redirectController != null
                             && redirectController.shouldIgnorePackage(expectedPackage)) {
@@ -743,7 +824,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
         String visibleUrl = urlExtractor.extract(root, null, packageName);
         logReread(packageName, visibleUrl);
-        if (visibleUrl != null) handleVisibleUrl(packageName, visibleUrl, store.getSet());
+        if (visibleUrl != null) handleVisibleUrl(packageName, visibleUrl);
     }
 
     /**
@@ -753,7 +834,6 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
      * quando o navegador sai da tela.
      */
     private void monitorBrowser(String packageName) {
-        if (!packageName.equals(monitoredPackage)) lastMonitoredFirefoxHost = null;
         monitoredPackage = packageName;
         if (pendingMonitorCheck != null) return;
 
@@ -794,14 +874,21 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     /**
      * Firefox: uma leitura por ciclo da observação. Como nas releituras após os eventos, a URL só
-     * conta estável: o mesmo domínio em duas leituras seguidas.
+     * conta estável, com o mesmo domínio numa segunda leitura logo em seguida
+     * (FIREFOX_RETRY_DELAY_MS). Antes, a segunda leitura era a do ciclo seguinte, e um site que
+     * escapou da troca levava até 4 s para ser pego.
      */
     private void readFirefoxWhileMonitoring(String packageName, AccessibilityNodeInfo root) {
-        String url = urlExtractor.extractFirefoxDisplayedUrl(root, packageName);
-        String host = DomainMatcher.extractHost(url);
-        boolean stable = host != null && host.equals(lastMonitoredFirefoxHost);
-        lastMonitoredFirefoxHost = host;
-        if (stable) handleVisibleUrl(packageName, url, store.getSet());
+        // A sequência de um evento em andamento já lê a barra.
+        if (pendingFirefoxRetry != null) return;
+
+        String host = DomainMatcher.extractHost(
+                urlExtractor.extractFirefoxDisplayedUrl(root, packageName));
+        if (host == null) return;
+
+        pendingFirefoxPackage = packageName;
+        pendingFirefoxIsCheck = true;
+        scheduleFirefoxRetryAttempt(packageName, 1, host, 1, FIREFOX_RETRY_DELAY_MS);
     }
 
     private void cancelMonitoring() {
@@ -826,13 +913,12 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
             if (store == null) store = new BlockedSitesStore(this);
             if (!store.isBlockingActive()) return;
-            Set<String> blockedSites = store.getSet();
 
             String visibleUrl = urlExtractor.extract(root, null, expectedPackage);
             logReread(expectedPackage, visibleUrl);
 
             if (visibleUrl != null) {
-                handleVisibleUrl(expectedPackage, visibleUrl, blockedSites);
+                handleVisibleUrl(expectedPackage, visibleUrl);
             }
         };
 
@@ -932,6 +1018,7 @@ public final class SiteBlockAccessibilityService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
+        cancelOtherAppRead();
         cancelFirefoxRetry();
         cancelReread();
         cancelUnsupportedBrowserCheck();

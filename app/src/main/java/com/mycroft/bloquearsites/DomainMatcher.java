@@ -4,6 +4,7 @@ import java.net.IDN;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Locale;
+import java.util.Set;
 
 public final class DomainMatcher {
     private DomainMatcher() {}
@@ -87,6 +88,23 @@ public final class DomainMatcher {
             }
         }
         return null;
+    }
+
+    /**
+     * Igual a findMatchedDomain, para uma lista já normalizada: consulta o host e cada domínio
+     * acima dele (m.example.com, example.com, com), sem percorrer a lista.
+     */
+    public static String findMatchedDomainNormalized(String rawUrl, Set<String> normalizedDomains) {
+        String host = extractHost(rawUrl);
+        if (host == null || normalizedDomains == null || normalizedDomains.isEmpty()) return null;
+
+        String candidate = host;
+        while (true) {
+            if (normalizedDomains.contains(candidate)) return candidate;
+            int dot = candidate.indexOf('.');
+            if (dot < 0) return null;
+            candidate = candidate.substring(dot + 1);
+        }
     }
 
     private static boolean hasExplicitScheme(String value) {
